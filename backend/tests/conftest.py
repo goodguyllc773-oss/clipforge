@@ -55,6 +55,29 @@ def worker(ctx):
     w.stop()
 
 
+@pytest.fixture(autouse=True)
+def fake_keychain(monkeypatch):
+    """No test may touch the real OS credential store — publishing tokens
+    live in an in-memory dict backend instead, for every test in the suite."""
+    from clipforge.publishing import credentials as cred_mod
+    store: dict[tuple[str, str], str] = {}
+
+    class _FakeKeyring:
+        @staticmethod
+        def set_password(service, key, value):
+            store[(service, key)] = value
+
+        @staticmethod
+        def get_password(service, key):
+            return store.get((service, key))
+
+        @staticmethod
+        def delete_password(service, key):
+            store.pop((service, key), None)
+
+    monkeypatch.setattr(cred_mod, "_backend", lambda: _FakeKeyring())
+
+
 @pytest.fixture
 def talk_copy(tmp_path, media) -> Path:
     """A private copy (with its .srt sidecar) that tests may move or delete."""

@@ -4,7 +4,10 @@ from __future__ import annotations
 
 from datetime import datetime
 
-from ..db.models import CandidateClip, ExportRecord, Job, Project, RenderedClip, SourceMedia, Transcript
+from ..db.models import (
+    CandidateClip, ExportRecord, Job, Project, PublishAccount, PublishJob, RenderedClip, SourceMedia,
+    Transcript,
+)
 from ..media.probe import BROWSER_PLAYABLE
 
 
@@ -47,12 +50,31 @@ def render_out(r: RenderedClip) -> dict:
             "encoder": r.encoder, "width": r.width, "height": r.height, "duration_s": r.duration_s,
             "file_size": r.file_size, "error": r.error, "validation": r.validation, "settings": r.settings,
             "job_id": r.job_id, "exports": [export_out(e) for e in r.exports],
+            "publishes": [publish_job_out(p) for p in r.publishes],
             "created_at": ts(r.created_at)}
 
 
 def export_out(e: ExportRecord) -> dict:
     return {"id": e.id, "dest_path": e.dest_path, "metadata_path": e.metadata_path,
             "post_metadata": e.post_metadata, "created_at": ts(e.created_at)}
+
+
+def publish_account_out(a: PublishAccount) -> dict:
+    return {"id": a.id, "platform": a.platform, "external_account_id": a.external_account_id,
+            "display_name": a.display_name, "thumbnail_url": a.thumbnail_url, "status": a.status,
+            "scopes": a.scopes, "auto_publish": a.auto_publish, "connected_at": ts(a.connected_at)}
+
+
+def publish_job_out(p: PublishJob) -> dict:
+    return {"id": p.id, "render_id": p.render_id, "account_id": p.account_id, "platform": p.platform,
+            "account_label": p.account_label, "title": p.title, "description": p.description,
+            "tags": p.tags, "privacy": p.privacy, "scheduled_for": ts(p.scheduled_for),
+            "scheduled_tz": p.scheduled_tz, "status": p.status,
+            "platform_upload_id": p.platform_upload_id, "platform_post_id": p.platform_post_id,
+            "platform_post_url": p.platform_post_url, "last_operation": p.last_operation,
+            "error_code": p.error_code, "error": p.error, "retry_count": p.retry_count,
+            "job_id": p.job_id, "published_at": ts(p.published_at), "created_at": ts(p.created_at),
+            "updated_at": ts(p.updated_at)}
 
 
 def candidate_out(c: CandidateClip, *, with_renders: bool = True) -> dict:

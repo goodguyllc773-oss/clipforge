@@ -30,10 +30,13 @@ _(planned)_ and live in `implementation-plan.md`.
 * The server binds to `127.0.0.1`, rejects non-local `Host` headers (DNS-rebinding
   guard) and only allows the dev origin through CORS. It lists local folders for the
   import dialog, which is why those guards matter.
-* The app makes **no outbound network calls**, with two narrow, user-triggered
-  exceptions: the one-time Whisper model download, and import-by-URL (see "Import
-  by URL" below and `docs/decisions.md` D13) — the import dialog's existing
-  local-path flow needs neither.
+* The app makes **no outbound network calls** on its own initiative. The
+  user-triggered exceptions: the one-time Whisper model download, import-by-URL
+  (`docs/decisions.md` D13), and publishing (D14) — each platform call happens
+  only for an account the user explicitly connected (their own OAuth consent, in
+  their own browser) and, for auto-publish, only for an account they explicitly
+  flipped that on for. The import dialog's local-path flow and the core
+  transcribe/analyse/render pipeline need none of this.
 
 ## Backend modules (`backend/clipforge/`)
 
@@ -59,8 +62,9 @@ _(planned)_ and live in `implementation-plan.md`.
 | `render/renderer.py` | Build the ffmpeg command, temp output, ffprobe validation, atomic move, encoder fallback | everything above |
 | `jobs/queue.py` | Durable job state machine in SQLite (enqueue, claim, lease, cancel, retry, recover) | db |
 | `jobs/worker.py` | Lane-based worker threads, heartbeats, cancellation plumbing | queue |
-| `jobs/handlers.py` | `transcribe`, `analyze`, `render` pipeline steps | all engine modules |
-| `services.py` | Use-cases shared by API and CLI (import media, review transitions, export) | db, engine |
+| `jobs/handlers.py` | `transcribe`, `analyze`, `render`, `import_url`, `publish` pipeline steps | all engine modules |
+| `publishing/` | `PlatformAdapter` interface; real YouTube (OAuth + resumable upload) and TikTok (OAuth + inbox/draft) adapters; `credentials.py` wraps the OS keychain | yt-dlp-style stdlib HTTP, `google-api-python-client`, `keyring` |
+| `services.py` | Use-cases shared by API and CLI (import media, review transitions, export, publish) | db, engine |
 | `api/` | FastAPI app, routes, response schemas | services |
 | `cli.py` | `serve`, `worker`, `doctor`, `migrate` | all |
 
@@ -281,6 +285,12 @@ GET  /api/renders/{id}/video (Range) · POST /api/renders/{id}/export {folder}
 GET  /api/jobs?status=&media_id= · GET /api/jobs/{id} · POST /api/jobs/{id}/cancel|retry
 GET  /api/profiles · /api/caption-presets (POST to add a custom preset)
 GET|PUT /api/settings · GET /api/fs/list?path=
+
+GET  /api/publish/platforms                      {youtube: {configured}, tiktok: {configured}}
+GET  /api/publish/{platform}/connect             → {authorize_url}; GET .../callback (OAuth redirect target)
+GET  /api/publish/accounts · PATCH .../{id} {auto_publish} · POST .../{id}/disconnect
+POST /api/renders/{id}/publish  {account_id, title?, description?, tags?, privacy?, scheduled_for?}  (202, async)
+GET  /api/publish/jobs?status=&platform= · GET .../{id} · POST .../{id}/cancel|retry
 ```
 
 ## Future SaaS seams (not built)
@@ -294,5 +304,17 @@ GET|PUT /api/settings · GET /api/fs/list?path=
   creator-authorised source, fetch with the creator's own credentials) feeding the same
   `import` use-case. No scraping. Import-by-URL (above) is not this: it fetches exactly
   the one link the user pastes, on demand, never lists or polls a source on its own.
-* **Publishing**: approved renders + post metadata → official platform APIs with tokens
-  in the OS keychain.
+* **Original Content Studio**: script generation/editing, narration (TTS)
+  adapters, a background-visual track system, and series continuity, reusing
+  this same render/caption engine for original (non-clipped) short-form video.
+  Not started.
+* **Campaign Center**: paid-clipping campaign records, campaign-aware clip
+  requirements, submission tracking, and estimated-vs-confirmed earnings
+  analytics. Not started.
+
+**Publishing is now built** — see `docs/decisions.md` D14, the "Publishing"
+module row above, and the `/api/publish/*` routes. YouTube is real
+(OAuth 2.0 + the official resumable upload API); TikTok is real OAuth + the
+inbox/draft upload (what an unaudited app is allowed to do) with Direct Post
+left as a documented `PlatformNotSupported` until the app has TikTok's review
+approval.

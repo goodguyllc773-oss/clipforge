@@ -91,3 +91,25 @@ class TranscriptionFailed(ClipForgeError):
 
 class JobCancelled(Exception):
     """Raised inside a handler when the job's cancel flag is observed."""
+
+
+class AccountNotConnected(ClipForgeError):
+    code = "ACCOUNT_NOT_CONNECTED"
+    http_status = 409
+
+
+class ReauthRequired(ClipForgeError):
+    code = "REAUTH_REQUIRED"
+    http_status = 409
+
+
+class PlatformNotSupported(ClipForgeError):
+    """The adapter exists but can't do what was asked yet (e.g. TikTok Direct
+    Post without an audited app) — a real, documented limitation, not a bug."""
+    code = "PLATFORM_NOT_SUPPORTED"
+    http_status = 409
+
+
+class PublishFailed(ClipForgeError):
+    code = "PUBLISH_FAILED"
+    retryable = True

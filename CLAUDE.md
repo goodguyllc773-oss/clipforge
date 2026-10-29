@@ -182,8 +182,16 @@ generated file. `alembic -c alembic.ini check` must report no drift.
   the import dialog, once, for that link — never on a schedule, never crawling a
   channel/playlist for more. Future source connectors use creator-authorised sources
   and official integrations only.
-- **No automatic publishing.** Future publishing uses official platform APIs with
-  tokens in the OS keychain, never in the repo or the database in plain text.
+- **Publishing is built** (`docs/decisions.md` D14, `clipforge/publishing/`) —
+  official platform APIs only (YouTube Data API, TikTok Content Posting API),
+  never browser automation, session/cookie reuse, or anything that works around
+  a platform's own access controls. OAuth tokens live in the OS keychain
+  (`keyring`), never the repo or the database in plain text. A clip only
+  reaches a platform automatically for an account the user explicitly flipped
+  `auto_publish` on for (off by default); a manual "Publish" click works
+  regardless. TikTok specifically: an unaudited app can only deliver a
+  **private draft** to the creator's inbox — never report one as published, and
+  never claim Direct Post works without TikTok's actual review approval.
 - **No paid services or recurring costs** without an explicit need and the user's
   OK. The core workflow must run locally for $0.
 - **Be honest about intelligence:** `heuristic-v1` is a baseline and must stay

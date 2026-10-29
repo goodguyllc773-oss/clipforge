@@ -17,12 +17,15 @@ from ..analysis.candidates import generate_candidates, overlap_fraction
 from ..analysis.framing import summarize_faces
 from ..analysis.signals import Loudness, cache_json, compute_loudness, detect_scenes, plan_chunks
 from ..db.models import (
-    AnalysisRun, CandidateClip, Project, RenderedClip, SourceMedia, Transcript, TranscriptChunk,
-    TranscriptSegment, utcnow,
+    AnalysisRun, CandidateClip, Project, PublishAccount, PublishJob, RenderedClip, SourceMedia,
+    Transcript, TranscriptChunk, TranscriptSegment, utcnow,
 )
-from ..errors import ClipForgeError, JobCancelled, NotFound
+from ..errors import ClipForgeError, JobCancelled, NotFound, PlatformNotSupported, ReauthRequired
 from ..media import download
 from ..media.paths import format_ts, slugify, to_relative
+from ..publishing import adapter as publish_adapter
+from ..publishing import credentials as publish_credentials
+from ..publishing.base import PublishRequest
 from ..render.renderer import RenderRequest, render_clip
 from .. import services
 from . import queue
@@ -284,11 +287,26 @@ def handle_import_url(ctx: JobContext) -> dict:
 
     dest_dir = app.settings.downloads_dir / ctx.job_id
     ctx.stage("Resolving link", 0.0)
+    downloading = False
+
+    def on_progress(frac: float | None, done_bytes: int) -> None:
+        nonlocal downloading
+        if frac is not None:
+            value = 0.05 + 0.85 * frac
+        else:
+            # Unknown total: creep toward (but never reach) the "Importing"
+            # handoff point as bytes come in, so the bar visibly moves instead
+            # of sitting frozen for the whole download.
+            mb = done_bytes / (1 << 20)
+            value = 0.05 + 0.80 * (1 - 1 / (1 + mb / 200))
+        if not downloading:
+            downloading = True
+            ctx.stage("Downloading", value)  # one forced flush for the label switch
+        else:
+            ctx.progress(value)  # throttled — safe to call on every hook tick
+
     try:
-        path, kind = download.fetch(
-            url, dest_dir,
-            on_progress=lambda f: ctx.progress(0.05 + 0.85 * f),
-            cancel_check=ctx.check)
+        path, kind = download.fetch(url, dest_dir, on_progress=on_progress, cancel_check=ctx.check)
         ctx.event(f"Downloaded via {'direct link' if kind == 'direct' else 'yt-dlp'}.")
         ctx.stage("Importing", 0.92)
         m, jobs = services.import_media(app, project_id, str(path), profile_key=profile_key,
@@ -299,7 +317,98 @@ def handle_import_url(ctx: JobContext) -> dict:
     return {"media_id": m.id, "job_ids": jobs, "source_url": url, "kind": kind}
 
 
+# --------------------------------------------------------------------------- publishing
+def _fail_publish_job(app, publish_job_id: str, *, account_id: str | None, needs_reauth: bool,
+                      code: str, message: str) -> None:
+    with app.session() as s:
+        pj = s.get(PublishJob, publish_job_id)
+        if pj is None:
+            return
+        pj.status = "needs_action" if needs_reauth else "failed"
+        pj.error_code, pj.error = code, message
+        pj.retry_count += 1
+        if needs_reauth and account_id:
+            acc = s.get(PublishAccount, account_id)
+            if acc is not None:
+                acc.status = "needs_reauth"
+
+
+def handle_publish(ctx: JobContext) -> dict:
+    """Upload one rendered clip to one connected platform account. A thin
+    shell around the platform adapter (``publishing/``) — this handler only
+    owns job/account bookkeeping, never a platform's wire format."""
+    app = ctx.app
+    publish_job_id = ctx.payload["publish_job_id"]
+
+    with app.session() as s:
+        pj = s.get(PublishJob, publish_job_id)
+        if pj is None:
+            raise NotFound("Publish job was deleted.")
+        if pj.account_id is None:
+            raise NotFound("The account for this publish job was removed.", code="ACCOUNT_GONE")
+        account = s.get(PublishAccount, pj.account_id)
+        if account is None or account.status != "connected":
+            raise NotFound("The account for this publish job isn't connected any more.",
+                           code="ACCOUNT_NOT_CONNECTED")
+        render = s.get(RenderedClip, pj.render_id)
+        if render is None or render.status != "completed":
+            raise NotFound("The render for this publish job is gone.")
+        file_path = services.render_file(app, render)
+        if not file_path.is_file():
+            raise NotFound("The rendered file is missing from the ClipForge data folder — render it again.")
+        req = PublishRequest(file_path=file_path, title=pj.title, description=pj.description,
+                             tags=pj.tags or [], privacy=pj.privacy, scheduled_for=pj.scheduled_for)
+        platform, account_id, credential_key = pj.platform, account.id, account.credential_key
+        pj.status, pj.last_operation = "uploading", "Starting upload."
+
+    ad = publish_adapter(platform)
+    token_data = publish_credentials.load_token(credential_key)
+    if token_data is None:
+        _fail_publish_job(app, publish_job_id, account_id=account_id, needs_reauth=True,
+                          code="REAUTH_REQUIRED", message="No stored credentials for this account.")
+        raise ReauthRequired("This account's credentials are missing.",
+                             hint="Reconnect it in Settings → Integrations.")
+    try:
+        token_data = ad.refresh(app.settings, token_data)
+        publish_credentials.save_token(credential_key, token_data)
+    except ReauthRequired as e:
+        _fail_publish_job(app, publish_job_id, account_id=account_id, needs_reauth=True,
+                          code=e.code, message=e.message)
+        raise
+
+    ctx.stage("Uploading", 0.05)
+    try:
+        result = ad.publish(token_data, req, on_progress=lambda f: ctx.progress(0.05 + 0.90 * min(f, 1.0)),
+                            cancel_check=ctx.check)
+    except ReauthRequired as e:
+        _fail_publish_job(app, publish_job_id, account_id=account_id, needs_reauth=True,
+                          code=e.code, message=e.message)
+        raise
+    except PlatformNotSupported as e:
+        with app.session() as s:
+            pj = s.get(PublishJob, publish_job_id)
+            pj.status, pj.error_code, pj.error = "needs_action", e.code, e.message
+        raise
+    except ClipForgeError as e:
+        with app.session() as s:
+            pj = s.get(PublishJob, publish_job_id)
+            pj.status = "failed"
+            pj.error_code, pj.error, pj.retry_count = e.code, e.message, pj.retry_count + 1
+        raise
+
+    with app.session() as s:
+        pj = s.get(PublishJob, publish_job_id)
+        pj.status = result.status
+        pj.platform_upload_id, pj.platform_post_id = result.platform_upload_id, result.platform_post_id
+        pj.platform_post_url, pj.last_operation = result.platform_post_url, result.note
+        if result.status == "published":
+            pj.published_at = utcnow()
+        ctx.event(result.note or f"{platform}: {result.status}.")
+    return {"publish_job_id": publish_job_id, "status": result.status,
+           "platform_post_url": result.platform_post_url}
+
+
 HANDLERS = {"transcribe": handle_transcribe, "analyze": handle_analyze, "render": handle_render,
-           "import_url": handle_import_url}
+           "import_url": handle_import_url, "publish": handle_publish}
 
 __all__ = ["HANDLERS", "queue"]

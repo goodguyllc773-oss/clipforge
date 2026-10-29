@@ -234,6 +234,7 @@ class RenderedClip(TimestampMixin, Base):
 
     candidate: Mapped[CandidateClip] = relationship(back_populates="renders")
     exports: Mapped[list[ExportRecord]] = relationship(back_populates="render", cascade="all, delete-orphan")
+    publishes: Mapped[list[PublishJob]] = relationship(back_populates="render", cascade="all, delete-orphan")
 
 
 class ExportRecord(Base):
@@ -247,6 +248,86 @@ class ExportRecord(Base):
     created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow, nullable=False)
 
     render: Mapped[RenderedClip] = relationship(back_populates="exports")
+
+
+# --------------------------------------------------------------------------- publishing
+class PublishAccount(TimestampMixin, Base):
+    """A connected destination account (e.g. one YouTube channel). The OAuth
+    token itself is never stored here — only ``credential_key``, which the OS
+    keychain (see ``publishing/credentials.py``) is looked up by. Losing the
+    database loses no secrets."""
+    __tablename__ = "publish_accounts"
+    __table_args__ = (UniqueConstraint("platform", "external_account_id", name="uq_account_identity"),)
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=new_id)
+    platform: Mapped[str] = mapped_column(String(16), nullable=False)  # youtube | tiktok
+    external_account_id: Mapped[str] = mapped_column(String(200), nullable=False)
+    display_name: Mapped[str] = mapped_column(String(200), default="", nullable=False)
+    thumbnail_url: Mapped[str | None] = mapped_column(Text, nullable=True)
+    # connected: token present and last used successfully.
+    # needs_reauth: refresh failed or the platform revoked it — publishing is blocked until reconnected.
+    # disconnected: the user disconnected it; token removed from the keychain.
+    status: Mapped[str] = mapped_column(String(16), default="connected", nullable=False)
+    credential_key: Mapped[str] = mapped_column(String(80), unique=True, nullable=False)
+    scopes: Mapped[list[Any]] = mapped_column(JSON, default=list, nullable=False)
+    # Off by default everywhere: publishing only becomes automatic for an
+    # account once the user explicitly flips this on for it (see CLAUDE.md
+    # publishing rules / docs/decisions.md D14).
+    auto_publish: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
+    connected_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow, nullable=False)
+
+    publishes: Mapped[list[PublishJob]] = relationship(back_populates="account")
+
+
+class PublishJob(TimestampMixin, Base):
+    """One attempt to get a rendered clip onto one platform account. Paired
+    with a ``jobs`` row (kind ``publish``) for execution, retries and crash
+    recovery, same pattern as ``Transcript``/``RenderedClip``. States only move
+    forward on a confirmed platform response — a failed upload is never
+    reported as published, and an unaudited-client draft is never reported as
+    published either."""
+    __tablename__ = "publish_jobs"
+    __table_args__ = (
+        Index(
+            "uq_publish_active_per_account",
+            "render_id", "account_id",
+            unique=True,
+            sqlite_where=text("status IN ('queued','uploading')"),
+        ),
+    )
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=new_id)
+    render_id: Mapped[str] = mapped_column(ForeignKey("rendered_clips.id", ondelete="CASCADE"), index=True)
+    # SET NULL, not CASCADE: disconnecting/removing an account must not erase
+    # the publish history recorded against it (campaign/earnings records in a
+    # later phase depend on this surviving).
+    account_id: Mapped[str | None] = mapped_column(
+        ForeignKey("publish_accounts.id", ondelete="SET NULL"), nullable=True, index=True)
+    platform: Mapped[str] = mapped_column(String(16), nullable=False)
+    account_label: Mapped[str] = mapped_column(String(200), default="", nullable=False)  # snapshot, survives SET NULL
+
+    title: Mapped[str] = mapped_column(String(200), default="", nullable=False)
+    description: Mapped[str] = mapped_column(Text, default="", nullable=False)
+    tags: Mapped[list[Any]] = mapped_column(JSON, default=list, nullable=False)
+    privacy: Mapped[str] = mapped_column(String(16), default="private", nullable=False)  # private|unlisted|public
+    scheduled_for: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    scheduled_tz: Mapped[str | None] = mapped_column(String(64), nullable=True)
+
+    # queued -> uploading -> uploaded|draft -> scheduled|published ; or failed|needs_action at any point.
+    status: Mapped[str] = mapped_column(String(16), default="queued", nullable=False, index=True)
+    platform_upload_id: Mapped[str | None] = mapped_column(String(200), nullable=True)
+    platform_post_id: Mapped[str | None] = mapped_column(String(200), nullable=True)
+    platform_post_url: Mapped[str | None] = mapped_column(Text, nullable=True)
+    last_operation: Mapped[str] = mapped_column(String(200), default="", nullable=False)
+    error_code: Mapped[str | None] = mapped_column(String(48), nullable=True)
+    error: Mapped[str | None] = mapped_column(Text, nullable=True)
+    retry_count: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
+    # Loose reference, like Job.project_id elsewhere: for display/filtering only.
+    job_id: Mapped[str | None] = mapped_column(String(36), nullable=True, index=True)
+    published_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+
+    render: Mapped[RenderedClip] = relationship(back_populates="publishes")
+    account: Mapped[PublishAccount | None] = relationship(back_populates="publishes")
 
 
 # --------------------------------------------------------------------------- presets / profiles

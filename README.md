@@ -107,6 +107,45 @@ download — see `docs/decisions.md` D13 for the reasoning and what's still true
 a regular backend dependency, in `backend/pyproject.toml`); no extra prerequisite
 to install by hand.
 
+## Publishing (YouTube / TikTok)
+
+Approve a clip, it renders, and — once you've connected an account and (optionally)
+turned on auto-publish for it — it can go straight to YouTube or TikTok with no
+further clicks. See `docs/decisions.md` D14 for the full design. Nothing here
+works without you first registering your own app with each platform; ClipForge
+never ships or embeds platform credentials.
+
+### Connecting YouTube
+
+1. In [Google Cloud Console](https://console.cloud.google.com/), create a project
+   (or use an existing one) and enable the **YouTube Data API v3**
+   (APIs & Services → Library).
+2. APIs & Services → Credentials → **Create OAuth client ID**, type **Web
+   application**. Add an authorized redirect URI:
+   `http://127.0.0.1:8765/api/publish/youtube/callback` (match
+   `CLIPFORGE_OAUTH_REDIRECT_BASE` below if you change it).
+3. Copy the Client ID and Client Secret and set them before starting the server:
+   `CLIPFORGE_YOUTUBE_CLIENT_ID=...` and `CLIPFORGE_YOUTUBE_CLIENT_SECRET=...`.
+4. Restart ClipForge, then Settings → Integrations → YouTube → Connect account.
+   Your Google account's OAuth consent screen opens in your own browser — sign in
+   there, not inside ClipForge.
+5. While your OAuth client is in Google's "Testing" publishing status, only
+   Google accounts you've added as test users can complete this — add yourself
+   under OAuth consent screen → Test users.
+
+### Connecting TikTok
+
+1. Register an app at [TikTok for Developers](https://developers.tiktok.com/)
+   and add the **Content Posting API** product.
+2. Add a redirect URI: `http://127.0.0.1:8765/api/publish/tiktok/callback`.
+3. Set `CLIPFORGE_TIKTOK_CLIENT_KEY=...` and `CLIPFORGE_TIKTOK_CLIENT_SECRET=...`,
+   restart, then Settings → Integrations → TikTok → Connect account.
+4. **Until TikTok approves your app's Content Posting API access**, published
+   clips land as a **private draft** in your TikTok inbox — open the TikTok app
+   yourself to add a caption and post it. This is TikTok's own platform policy
+   for unaudited apps, not a ClipForge limitation, and ClipForge never reports a
+   draft as "published".
+
 ## Known limitations
 
 * Clip ranking is a transparent **heuristic baseline** (hook / finished thought /

@@ -1,5 +1,6 @@
 import type {
-  Candidate, CaptionPreset, ExportRec, FsEntry, Job, Media, Prefs, Profile, Project, Render,
+  Candidate, CaptionPreset, ExportRec, FsEntry, Job, Media, Prefs, PublishAccount, PublishJob, Profile,
+  Project, Render,
 } from "./types";
 
 export class ApiError extends Error {
@@ -29,6 +30,7 @@ async function req<T>(method: string, url: string, body?: unknown): Promise<T> {
 
 const get = <T,>(u: string) => req<T>("GET", u);
 const post = <T,>(u: string, b: unknown = {}) => req<T>("POST", u, b);
+const del = <T,>(u: string) => req<T>("DELETE", u);
 const enc = encodeURIComponent;
 
 export const api = {
@@ -48,6 +50,7 @@ export const api = {
   createProject: (b: { name: string; description?: string; default_profile_key?: string }) =>
     post<Project>("/api/projects", b),
   patchProject: (id: string, b: Partial<Project>) => req<Project>("PATCH", `/api/projects/${id}`, b),
+  deleteProject: (id: string) => del<void>(`/api/projects/${id}`),
 
   importMedia: (projectId: string, b: { path: string; profile_key?: string; transcript_path?: string | null }) =>
     post<Media & { job_ids: string[] }>(`/api/projects/${projectId}/media`, b),
@@ -69,6 +72,23 @@ export const api = {
   exportRender: (id: string, folder?: string) =>
     post<ExportRec>(`/api/renders/${id}/export`, { folder: folder || null }),
   renderInfo: (id: string) => get<Render>(`/api/renders/${id}`),
+
+  publishPlatforms: () => get<Record<string, { configured: boolean }>>("/api/publish/platforms"),
+  publishAccounts: () => get<PublishAccount[]>("/api/publish/accounts"),
+  publishConnect: (platform: string) => get<{ authorize_url: string }>(`/api/publish/${platform}/connect`),
+  patchPublishAccount: (id: string, auto_publish: boolean) =>
+    req<PublishAccount>("PATCH", `/api/publish/accounts/${id}`, { auto_publish }),
+  disconnectAccount: (id: string) => post<void>(`/api/publish/accounts/${id}/disconnect`),
+  publishRender: (renderId: string, b: {
+    account_id: string; title?: string; description?: string; tags?: string[];
+    privacy?: "private" | "unlisted" | "public"; scheduled_for?: string | null; scheduled_tz?: string | null;
+  }) => post<PublishJob>(`/api/renders/${renderId}/publish`, b),
+  publishJobs: (q: { status?: string; platform?: string } = {}) => {
+    const qs = new URLSearchParams(Object.entries(q).filter(([, v]) => v != null).map(([k, v]) => [k, String(v)]));
+    return get<PublishJob[]>(`/api/publish/jobs?${qs}`);
+  },
+  cancelPublish: (id: string) => post<PublishJob>(`/api/publish/jobs/${id}/cancel`),
+  retryPublish: (id: string) => post<PublishJob>(`/api/publish/jobs/${id}/retry`),
 
   jobs: (q: { status?: string; media_id?: string; project_id?: string; limit?: number } = {}) => {
     const qs = new URLSearchParams(Object.entries(q).filter(([, v]) => v != null).map(([k, v]) => [k, String(v)]));

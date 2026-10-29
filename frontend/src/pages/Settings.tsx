@@ -1,7 +1,10 @@
 import { useEffect, useState } from "react";
 import { api } from "../api";
+import ConfirmButton from "../components/ConfirmButton";
 import type { Prefs } from "../types";
-import { errText, useData } from "../util";
+import { errText, go, useData, useHashRoute } from "../util";
+
+const PLATFORM_NAMES: Record<string, string> = { youtube: "YouTube", tiktok: "TikTok" };
 
 const MODELS = ["tiny", "base", "small", "medium", "large-v3", "large-v3-turbo", "distil-large-v3",
   "tiny.en", "base.en", "small.en", "medium.en"];
@@ -15,6 +18,24 @@ export default function SettingsPage() {
   const [err, setErr] = useState<string | null>(null);
   useEffect(() => { if (prefs.data) setForm(prefs.data); }, [prefs.data]);
 
+  const route = useHashRoute();
+  const platforms = useData(() => api.publishPlatforms(), []);
+  const accounts = useData(() => api.publishAccounts(), []);
+  const [connectMsg, setConnectMsg] = useState<{ ok: boolean; text: string } | null>(null);
+  useEffect(() => {
+    const [, kind, value] = route;
+    if (kind === "publish-ok") {
+      const [platform] = (value ?? "").split(":");
+      setConnectMsg({ ok: true, text: `Connected ${PLATFORM_NAMES[platform] ?? platform}.` });
+      accounts.refresh();
+      go("/settings");
+    } else if (kind === "publish-err") {
+      setConnectMsg({ ok: false, text: `Couldn't connect: ${value}` });
+      go("/settings");
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [route[1], route[2]]);
+
   if (!form) return <div className="muted">Loading…</div>;
   const set = <K extends keyof Prefs>(k: K, v: Prefs[K]) => setForm({ ...form, [k]: v });
   const save = async () => {
@@ -24,6 +45,14 @@ export default function SettingsPage() {
   };
   const d = diag.data;
   const size = `${form.output_width}x${form.output_height}`;
+  const connect = async (platform: string) => {
+    try {
+      const { authorize_url } = await api.publishConnect(platform);
+      window.location.href = authorize_url;
+    } catch (e) {
+      setConnectMsg({ ok: false, text: errText(e) });
+    }
+  };
 
   return (
     <div className="col" style={{ gap: 18, maxWidth: 900 }}>
@@ -86,6 +115,54 @@ export default function SettingsPage() {
         <button className="primary" onClick={save}>Save settings</button>
         {msg && <span className="ok small">{msg}</span>}
         {err && <span className="err small">{err}</span>}
+      </div>
+
+      <div className="panel col">
+        <h3>Integrations</h3>
+        {connectMsg && <div className={connectMsg.ok ? "ok small" : "err small"}>{connectMsg.text}</div>}
+        {Object.entries(platforms.data ?? {}).map(([platform, info]) => {
+          const accs = (accounts.data ?? []).filter((a) => a.platform === platform);
+          return (
+            <div key={platform} className="col" style={{ gap: 6 }}>
+              <div className="row between">
+                <b>{PLATFORM_NAMES[platform] ?? platform}</b>
+                {info.configured ? (
+                  <button className="tiny" onClick={() => connect(platform)}>+ Connect account</button>
+                ) : (
+                  <span className="muted small">
+                    Not set up — see README "Connecting {PLATFORM_NAMES[platform] ?? platform}".
+                  </span>
+                )}
+              </div>
+              {accs.length === 0 && <div className="muted small">No account connected.</div>}
+              {accs.map((a) => (
+                <div key={a.id} className="row between small" style={{ paddingLeft: 8 }}>
+                  <div>
+                    {a.display_name}{" "}
+                    <span className={`chip ${a.status === "connected" ? "completed" : "failed"}`}>{a.status}</span>
+                  </div>
+                  <div className="row">
+                    <label className="inline small">
+                      <input type="checkbox" checked={a.auto_publish} disabled={a.status !== "connected"}
+                             onChange={async (e) => {
+                               await api.patchPublishAccount(a.id, e.target.checked);
+                               accounts.refresh();
+                             }} />
+                      auto-publish
+                    </label>
+                    <ConfirmButton className="tiny ghost bad"
+                                  onConfirm={async () => { await api.disconnectAccount(a.id); accounts.refresh(); }}>
+                      Disconnect
+                    </ConfirmButton>
+                  </div>
+                </div>
+              ))}
+            </div>
+          );
+        })}
+        <div className="muted small">
+          Auto-publish only applies per account, and only once you turn it on here — nothing posts on its own otherwise.
+        </div>
       </div>
 
       <div className="panel col">

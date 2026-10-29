@@ -135,6 +135,7 @@ function ClipDetail({ c, m, profiles, presets, renderJob, onChange }: DetailProp
         </div>
         <Boundaries c={c} m={m} onSaved={onChange} />
         {latest && <ExportBox renderId={latest.id} c={c} />}
+        {latest && <PublishBox renderId={latest.id} c={c} />}
         {err && <div className="err small">{err}</div>}
         {note && <div className="ok small">{note}</div>}
       </div>
@@ -425,6 +426,92 @@ function RegionPreview({ m, t, rect }: { m: Media; t: number; rect: Rect }) {
         position: "absolute", left: `${rect.x * 100}%`, top: `${rect.y * 100}%`, width: `${rect.w * 100}%`,
         height: `${rect.h * 100}%`, border: "2px solid var(--accent)", background: "rgba(255,122,69,0.15)",
       }} />
+    </div>
+  );
+}
+
+const PLATFORM_NAMES: Record<string, string> = { youtube: "YouTube", tiktok: "TikTok" };
+const ACTIVE_PUBLISH = new Set(["queued", "uploading"]);
+
+function PublishBox({ renderId, c }: { renderId: string; c: Candidate }) {
+  const accounts = useData(() => api.publishAccounts(), []);
+  const connected = (accounts.data ?? []).filter((a) => a.status === "connected");
+  const render = useData(() => api.renderInfo(renderId), [renderId], 2000,
+    (d) => (d?.publishes ?? []).some((p) => ACTIVE_PUBLISH.has(p.status)));
+  const publishes = render.data?.publishes ?? [];
+
+  const [accountId, setAccountId] = useState("");
+  const [title, setTitle] = useState(c.post_title || "");
+  const [privacy, setPrivacy] = useState<"private" | "unlisted" | "public">("private");
+  const [err, setErr] = useState<string | null>(null);
+  useEffect(() => { if (!accountId && connected[0]) setAccountId(connected[0].id); }, [connected[0]?.id]);
+
+  const publish = async () => {
+    setErr(null);
+    try {
+      await api.publishRender(renderId, {
+        account_id: accountId, title, description: c.transcript_text, tags: c.post_hashtags,
+        privacy,
+      });
+      render.refresh();
+    } catch (e) { setErr(errText(e)); }
+  };
+
+  if (connected.length === 0) {
+    return (
+      <div className="panel col">
+        <h3>Publish</h3>
+        <div className="muted small">
+          No connected account yet. Connect one in <a href="#/settings">Settings → Integrations</a>.
+        </div>
+      </div>
+    );
+  }
+
+  return (
+    <div className="panel col">
+      <h3>Publish</h3>
+      <div className="row">
+        <label>Account
+          <select value={accountId} onChange={(e) => setAccountId(e.target.value)}>
+            {connected.map((a) => (
+              <option key={a.id} value={a.id}>{PLATFORM_NAMES[a.platform] ?? a.platform} — {a.display_name}</option>
+            ))}
+          </select>
+        </label>
+        <label>Privacy
+          <select value={privacy} onChange={(e) => setPrivacy(e.target.value as typeof privacy)}>
+            <option value="private">Private</option>
+            <option value="unlisted">Unlisted</option>
+            <option value="public">Public</option>
+          </select>
+        </label>
+      </div>
+      <label>Title
+        <input value={title} onChange={(e) => setTitle(e.target.value)} placeholder="Clip title" />
+      </label>
+      <button className="primary" onClick={publish} disabled={c.review_status !== "approved"}
+              title={c.review_status !== "approved" ? "Approve the clip first" : ""}>Publish</button>
+      {err && <div className="err small">{err}</div>}
+      {publishes.map((p) => (
+        <div key={p.id} className="row between small" style={{ borderTop: "1px solid var(--line)", paddingTop: 6 }}>
+          <div>
+            {PLATFORM_NAMES[p.platform] ?? p.platform} · {p.account_label}{" "}
+            <span className={`chip ${p.status === "failed" || p.status === "needs_action" ? "failed"
+              : ACTIVE_PUBLISH.has(p.status) ? "running" : "completed"}`}>{p.status}</span>
+            {p.platform_post_url && <> · <a href={p.platform_post_url} target="_blank" rel="noreferrer">open</a></>}
+            {(p.error || p.last_operation) && <div className="muted">{p.error || p.last_operation}</div>}
+          </div>
+          <div className="row">
+            {ACTIVE_PUBLISH.has(p.status) && (
+              <button className="tiny ghost" onClick={async () => { await api.cancelPublish(p.id); render.refresh(); }}>Cancel</button>
+            )}
+            {(p.status === "failed" || p.status === "needs_action") && (
+              <button className="tiny" onClick={async () => { await api.retryPublish(p.id); render.refresh(); }}>Retry</button>
+            )}
+          </div>
+        </div>
+      ))}
     </div>
   );
 }

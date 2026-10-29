@@ -3,7 +3,7 @@
 Legend: ✅ done and covered by automated tests · 🟡 implemented, verified only partly
 (see note) · ⬜ not started · ⛔ blocked
 
-Last updated with milestone 1 (vertical slice).
+Last updated with milestone 2a (publishing), 2026-10-29.
 
 ## Milestone 1 — local vertical slice
 
@@ -101,12 +101,42 @@ Last updated with milestone 1 (vertical slice).
   in the build environment). Review on first run.
 - ⬜ Tauri 2 desktop shell
 
+## Milestone 2a — Publishing (docs/decisions.md D14)
+
+### I. Publishing
+- ✅ Provider-neutral queue: `publish_accounts` / `publish_jobs` tables
+  (migration `0003`), a `publish` job lane on the existing durable job queue
+  (retry/lease/crash-recovery reused, nothing reinvented)
+- ✅ `PlatformAdapter` interface (`clipforge/publishing/base.py`); OAuth tokens
+  in the OS keychain via `keyring`, never the database
+- ✅ YouTube adapter: real OAuth 2.0 (`google-auth-oauthlib`) + the real
+  resumable `videos.insert` upload (`google-api-python-client`). **Code-complete
+  and covered by 20 mocked tests (`tests/test_publishing.py`) — not yet
+  exercised against a real Google Cloud OAuth client or a real upload.** Needs
+  the developer's own registered app (README "Connecting YouTube").
+- ✅ TikTok adapter: real OAuth 2.0 + the inbox/draft upload workflow (what an
+  unaudited app is allowed to do); Direct Post (public/unlisted) raises
+  `PlatformNotSupported` with the manual-completion fallback instead of
+  silently downgrading. **Same caveat as YouTube: not yet exercised against a
+  real TikTok app** — needs the developer's own registered app and, for
+  anything beyond draft, TikTok's review approval.
+- ✅ `auto_publish` is per-account and off by default; a manual "Publish" action
+  on the Review page works regardless
+- ✅ Settings → Integrations (connect/disconnect, auto-publish toggle) and a
+  Publishing Queue page (status, retry, cancel, open the published/draft link)
+- ⬜ Scheduled publishing actually honoured by an adapter (the field exists on
+  `PublishJob`; neither adapter reads it yet — both publish immediately)
+- ⬜ TikTok `status.fetch` polling wired into the UI (the adapter method exists,
+  unused — a draft's status doesn't change server-side after inbox delivery,
+  so there's nothing to poll yet)
+
 ## Automated tests (pytest)
 
 `101 passed, 1 skipped` in ~105 s on a 4-core container (Python 3.13, FFmpeg 6.1.1,
-no GPU), plus 23 more for import-by-URL (`test_import_url.py`, added 2026-10-29):
-`124 passed, 1 skipped` in ~62 s, verified on the Windows PC. Mapping to the
-required list:
+no GPU). On the Windows PC (RTX 2060 Super), with import-by-URL
+(`test_import_url.py`, 24 tests) and publishing (`test_publishing.py`, 20
+tests, all mocked — see "Publishing" above for what's real vs. mocked-only)
+added: `147 passed, 1 skipped` in ~140 s. Mapping to the required list:
 
 | # | Requirement | Where |
 |---|---|---|
@@ -128,6 +158,7 @@ required list:
 | 16 | Missing source files | `test_paths.py::test_missing_source_is_detected_and_relinked` |
 | 17 | Safe output naming / paths | `test_paths.py` |
 | 18 | Import by URL (classification, download, failure codes) | `test_import_url.py` |
+| 19 | Publishing (account connect, queue states, retry/idempotency, API errors, restart recovery) | `test_publishing.py` |
 
 Fixtures are generated with ffmpeg at test time (test patterns + `flite` synthetic
 speech), so no third-party footage is involved.
@@ -145,9 +176,19 @@ speech), so no third-party footage is involved.
 7. Paths with spaces, non-ASCII names, a source on an external drive that is then
    unplugged (→ "missing" + relink).
 8. Upload an exported clip to TikTok/Reels drafts: check captions stay clear of the UI.
-9. Import by URL against the real internet: a direct CDN `.mp4` link, and a real
-   YouTube and TikTok link — confirm `yt-dlp` resolves them and the result feeds
-   cleanly into transcription.
+9. ✅ Import by URL against the real internet — done 2026-10-29: a real ~43-minute
+   YouTube video imported, transcribed (real Whisper, `cuda`), analysed (20
+   candidates found), approved and rendered (`h264_nvenc`), end to end. (A real
+   TikTok link is still untried.) See `HANDOFF.md`.
+10. **Publishing, real accounts** (needs a registered app per platform — README
+    "Connecting YouTube/TikTok"):
+    - YouTube: connect a real account, publish a real render as `private`,
+      confirm the returned video ID/URL actually opens the upload on YouTube.
+    - TikTok: connect a real account, publish a real render, confirm it lands
+      in the creator's TikTok inbox as a draft (not public) and the app can't
+      do anything more without TikTok's review approval.
+    - Token refresh: force an expired/revoked token and confirm the account
+      flips to `needs_reauth` instead of the publish job silently failing.
 
 ## Next milestone (M2) — make the picks good and the loop fast
 
@@ -163,6 +204,19 @@ speech), so no third-party footage is involved.
 6. **Tauri 2 shell** with native file dialogs and the backend as a sidecar.
 7. Playwright UI test committed to CI.
 
-Later (not before the above): source connectors (creator-authorised only), official
-platform publishing APIs with tokens in the OS keychain, accounts/entitlements,
-optional remote workers.
+Later (not before the above): source connectors (creator-authorised only),
+accounts/entitlements, optional remote workers.
+
+## Milestone 3 — Original Content Studio (not started)
+
+Script generation/editing/series-continuity, narration (TTS) adapters, a
+background-visual track system, reusing the existing render/caption engine for
+original (non-clipped) short-form video. See `docs/architecture.md` "Future
+SaaS seams". Deferred out of this session's scope — a separate, large piece of
+work; see `HANDOFF.md` "What's next".
+
+## Milestone 4 — Campaign Center (not started)
+
+Paid-clipping campaign records, campaign-aware clip requirements, submission
+tracking, estimated-vs-confirmed earnings analytics. Also deferred — see
+`HANDOFF.md` "What's next".

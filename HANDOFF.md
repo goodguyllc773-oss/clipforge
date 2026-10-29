@@ -4,336 +4,199 @@ Read this first, every time you work on ClipForge, before touching anything else
 Update it before you stop, and immediately before any context compaction (see
 CLAUDE.md, "ClipForge: HANDOFF.md", for the exact rule).
 
-_Last updated 2026-10-29 (cloud session, Linux container, no GPU). **Where we left
-off:** ClipForge has been **moved into its own repo**, `goodguyllc773-oss/clipforge`
-(public, branch `main`), with its history kept. It now has MCC-style "start it up"
-support (`npm run dev` / `start-dev.cmd` / `.claude/launch.json`) and a
-session-start sync hook. **⚠ The GitHub repo doesn't exist yet.** The user chose
-**option (a)**: Claude creates it from a local session on the Windows PC with the
-user's `gh` login (see "Pending: create the GitHub repo"). Until then, everything
-lives in the Alfred branch `claude/clipforge-local-first-ai-ojxjpr`, under
-`clipforge/`. Milestone 1 has still **never run on the Windows
-PC**: that's the next job after the repo exists._
+_Last updated 2026-10-29 (local session, Windows PC, RTX 2060 Super). **Where we
+left off:** the full pipeline (import → transcribe → analyze → review → render →
+export) is verified working end-to-end on real hardware against a real
+43-minute YouTube video. Import-by-URL (YouTube/TikTok/direct links) and a new
+Publishing feature (YouTube + TikTok, OAuth, auto-publish) were both built this
+session. **⚠ A large amount of work is uncommitted** — see "Uncommitted work"
+below. Don't assume `git log` on `main` reflects everything described here;
+check `git status` first._
 
 ## Step zero, every session: fetch before trusting this file
 
 **First: is this session on the user's computer?** If the "[ClipForge location
 check]" line says CLOUD, stop. Tell the user, and send them to a local session
-on `C:\Users\xalex\clipforge` (see CLAUDE.md, "Step 0"). Only then:
+on `C:\Users\xalex\clipforge` (see CLAUDE.md, "Step 0").
 
-**Before reading anything else, run `git fetch origin` and compare local HEAD to
-`origin/main`.** The SessionStart hook (`scripts/repo-sync.mjs`) does this
-automatically and reports "[ClipForge repo sync …]". With no such line, run
-`npm run sync`. This repo is worked on from several machines (Windows PC, Mac,
-cloud sessions); a stale checkout means a stale HANDOFF.
+**Before reading anything else, run `git status` and `git fetch origin`.** The
+SessionStart hook (`scripts/repo-sync.mjs`) does this automatically and reports
+"[ClipForge repo sync …]" — but it only acts when the tree is clean, and right
+now it probably isn't (see below). Check `git status` yourself too.
 
-- If local is behind: `git pull --ff-only` *before* reading the rest of this file.
-- If this file says something different from `git log`, trust `git log` and fix
-  this file.
+## Repo state (check this before believing any of the rest of this file)
 
-## Pending: create the GitHub repo — option (a), from a Claude Code session ON THE WINDOWS PC
-
-**The user chose option (a) (2026-10-29):** Claude creates the repo from a
-**local** Claude Code session on the Windows PC, using the user's own `gh` login.
-A cloud session can't do it: the Claude GitHub App gets `403 Resource not
-accessible by integration` on repo creation, and a cloud container has no `gh`
-login and can't reach the PC.
-
-**Source of truth until this is done:** the Alfred repo, branch
-`claude/clipforge-local-first-ai-ojxjpr`, folder `clipforge/`. It is complete:
-code, docs, this file, the launcher and the sync hook. It was never merged into
-Alfred's `main`, and must not be.
-
-Steps (run them yourself, in this order; don't hand them to the user):
-
-1. `gh auth status` should show **goodguyllc773-oss**. If not logged in, ask the
-   user to run `gh auth login` (browser sign-in). Never handle their password.
-2. `gh repo view goodguyllc773-oss/clipforge` should say "not found". If the repo
-   already exists, STOP and ask the user; don't overwrite anything.
-3. Get the branch into a scratch clone outside AppData:
-   `git clone --branch claude/clipforge-local-first-ai-ojxjpr https://github.com/goodguyllc773-oss/Alfred.git C:\Users\xalex\alfred-split`
-4. Split `clipforge/` out with its history:
-   `git -C C:\Users\xalex\alfred-split subtree split --prefix=clipforge -b clipforge-main`
-   (Git for Windows ships `git subtree`). The log of `clipforge-main` should start
-   with the milestone 1 commit.
-5. `gh repo create goodguyllc773-oss/clipforge --public --description "Local-first AI clipping: long videos in, captioned vertical clips out. Runs on your own machine."`
-   Public was the user's choice. Pass no `--clone` and no README flags: the repo
-   must start empty.
-6. `git -C C:\Users\xalex\alfred-split push https://github.com/goodguyllc773-oss/clipforge.git clipforge-main:main`
-7. `git clone https://github.com/goodguyllc773-oss/clipforge.git C:\Users\xalex\clipforge`
-   Check it: `git log --oneline` shows the carried-over commits, and `CLAUDE.md`,
-   `HANDOFF.md`, `start-dev.cmd`, `setup.cmd` and `scripts\repo-sync.mjs` exist.
-8. Delete the scratch clone `C:\Users\xalex\alfred-split`.
-9. Tell the user to reopen Claude Code **in `C:\Users\xalex\clipforge`**, so that
-   repo's CLAUDE.md applies. Then continue with "First run on the Windows PC"
-   below, starting at step 2.
-10. Later, ask before doing it: replace `clipforge/` on the Alfred branch with a
-    one-line pointer to the new repo, so there's one copy.
+- **Repo:** `goodguyllc773-oss/clipforge` (public, on GitHub for real now — the
+  "create the repo" job from earlier is done), branch `main`.
+- **Pushed to `main`:** the import-by-URL feature (`bdc4a6a`, merged from
+  `clipforge/url-import`, PR #1).
+- **Uncommitted in this checkout** (`git status` to confirm — this list will go
+  stale the moment someone commits):
+  - Delete-project feature (backend `DELETE /api/projects/{id}` + cascade
+    cleanup, frontend `ConfirmButton` component — native `confirm()` is
+    suppressed in the Claude desktop app's browser pane, so a custom two-click
+    confirm is used everywhere instead of `window.confirm`).
+  - Accent color changed from orange to green (`frontend/src/styles.css`).
+  - Two real bugs found and fixed in import-by-URL after merging it:
+    1. `yt-dlp` pinned `<2026` went stale and YouTube started 403ing mid-download
+       — unpinned the upper bound (`backend/pyproject.toml`), documented why.
+    2. The download progress bar froze at 90% on large/fragmented downloads:
+       yt-dlp's `total_bytes_estimate` is recomputed from the *current*
+       fragment's size each call, so while one large fragment is mid-download
+       the estimate (and the % derived from it) sits still even though bytes
+       keep flowing. Fixed in `media/download.py` to only trust a genuine
+       `total_bytes`, falling back to a byte-count "creep" otherwise
+       (`jobs/handlers.py::handle_import_url`).
+  - `beam_size` default dropped from 5 to 1 in `transcription/whisper.py`
+    (greedy decoding) — roughly halves transcription wall time with word
+    timestamps on, little accuracy loss on clear speech. User-requested after
+    watching a real transcription run far slower than expected.
+  - **Publishing** (new this session, D14 below) — the biggest uncommitted
+    piece: `clipforge/publishing/` (adapter interface + real YouTube + TikTok
+    adapters), migration `0003_publishing.py`, the `publish` job lane/handler,
+    `/api/publish/*` routes, Settings → Integrations UI, Review page "Publish"
+    box, a Publishing Queue page, `tests/test_publishing.py` (20 tests, all
+    mocked), and new dependencies (`google-api-python-client`, `google-auth`,
+    `google-auth-oauthlib`, `keyring`).
+- **Only commit when the user asks** (CLAUDE.md rule) — none of the above has
+  been committed. When they do ask: review `git status`/`git diff` first (a lot
+  of unrelated-looking changes landed in one session), probably as more than
+  one commit (delete-project+accent / bugfixes / publishing are logically
+  separate), then push.
 
 ## Current state
 
-- **Repo:** `goodguyllc773-oss/clipforge` (public), branch `main`; check
-  `git log -1`. Not on GitHub yet (see above).
-- **History:** carried over from the Alfred repo with `git subtree split`:
-  - `2c8f233` milestone 1 vertical slice
-  - `c951c8c` HANDOFF.md + rules
-  - then the standalone-repo commit (CLAUDE.md, launcher, sync hook).
-- **Where it has run:** only 2026-10-29 cloud sessions:
-  - Linux, Python 3.13, Node 22, FFmpeg 6.1.1, 4 CPUs, 15 GB RAM, **no GPU**.
-  - **Windows PC: never set up. Mac: never set up.**
-- **Running servers:** none that matter. Cloud-session servers and data dirs were
-  temporary.
-- **Data:** none worth keeping exists anywhere yet. A fresh data dir is created on
-  first start:
-  - Windows: `%LOCALAPPDATA%\ClipForge`
-  - Mac: `~/Library/Application Support/ClipForge`
-  - Override with `CLIPFORGE_DATA_DIR`.
-  - It holds the DB, renders, models, cache and logs. **Not in git.**
-- **Database:** two Alembic migrations, `0001_initial_schema` and `0002_source_url`
-  (adds `source_media.source_url`, for import-by-URL), applied automatically on
-  start. `alembic check` reported no drift (verified in the `clipforge/url-import`
-  worktree below).
-- **Per-machine setup (git doesn't carry it):**
-  - `backend/.venv`, `frontend/node_modules`, `frontend/dist`, the Whisper model,
-    and the Claude sync hook in `~/.claude/settings.json`.
-  - `setup.cmd` (Windows) or `scripts/setup-mac.sh` (macOS) creates all of them.
-  - Re-run it after pulls that change dependencies; the sync hook says when.
-- **"Start it up":** `npm run dev` (`scripts/dev.mjs`) runs the API + worker on
-  :8765 and the hot-reload UI on :5173 (which proxies `/api`).
-  - Windows: Claude launches it with `explorer.exe "<repo>\start-dev.cmd"`.
-  - Mac: `open start-dev.command`.
-  - Then Claude opens http://127.0.0.1:5173/ in the built-in browser pane. See
-    CLAUDE.md, "Getting up and running".
-  - `start.cmd` is the non-dev way: the built UI on :8765.
-- **Gotcha #1 (Windows): AppData isn't shared with Claude's sandbox,** and
-  ClipForge keeps its DB, renders and Whisper models in `%LOCALAPPDATA%`. Start
-  servers and setup through `explorer.exe`, never as a plain tool-call process.
-- **Gotcha #2:** the UI on :8765 is `frontend/dist`. After changing
-  `frontend/src`, `npm run build`, or use the dev servers (:5173 hot-reloads).
-- **Gotcha #3:** `CLIPFORGE_TRANSCRIBER=sidecar` reads `.srt/.vtt/.json` files
-  next to the video instead of running Whisper. That's how cloud sessions test
-  without a model. The default is `faster-whisper`.
-- **Gotcha #4:** in a Bash tool call, `pkill -f` / `pgrep -f` / `kill $(…grep…)`
-  patterns match the tool's own shell command line and kill it. Put
-  process-hunting in a script file, or use `ps -eo pid,args` with a `[b]racket`
-  pattern.
-- **Gotcha #5:** in Playwright, `has-text("Approve")` also matches the
-  "approved (0)" tab. Use `✓ Approve`.
-- **Gotcha #6:** cloud sessions couldn't reach huggingface.co (network policy), so
-  no Whisper models there unless the environment's Network access allows it.
-- **Gotcha #7:** schema changes: `alembic -c alembic.ini upgrade head`, then
-  `revision --autogenerate`. Autogenerating against an empty DB re-emits the whole
-  schema.
-- **Gotcha #8:** MCC's setup recognises its hook by `sync-check.mjs` in the
-  command, so ClipForge's script is `repo-sync.mjs` and its installer matches
-  `repo-sync.mjs` + `clipforge`. Don't rename either to `sync-check.mjs`.
+- **Where it runs:** this Windows PC only, verified. Dev servers:
+  `explorer.exe start-dev.cmd` → API+worker on :8765, hot-reload UI on :5173.
+  **The backend does not hot-reload** — `clipforge serve` runs without
+  `--reload` (`scripts/dev.mjs`), so any backend `.py` change needs the dev
+  servers restarted (frontend changes hot-reload fine via Vite). Restarting:
+  find the PIDs on :8765/:5173 (`Get-NetTCPConnection` in PowerShell),
+  `Stop-Process -Force`, then relaunch via `explorer.exe start-dev.cmd` again —
+  never as a plain background Bash/PowerShell process (gotcha #1 below).
+- **Database:** migrations `0001_initial_schema`, `0002_source_url`,
+  `0003_publishing` (uncommitted). Applied automatically on start.
+  `alembic check` → no drift, verified.
+- **Tests:** `147 passed, 1 skipped` (full suite, this PC, with ffmpeg on PATH
+  — the winget install isn't on this shell's PATH by default, prepend
+  `AppData\Local\Microsoft\WinGet\Packages\Gyan.FFmpeg_*\ffmpeg-*\bin`).
+  Frontend `npm run typecheck` / `npm run build` clean.
+- **Real hardware confirmed, not just detected:**
+  - CUDA: faster-whisper transcription actually ran on `cuda` (not just
+    `nvidia-smi` / diagnostics saying so).
+  - NVENC: a real render's `encoder` field read `h264_nvenc`.
+  - A real ~43-minute YouTube video (1080p, 1.5 GB) imported via paste-a-link,
+    transcribed for real (5 chunks, `faster-whisper`/`small`/`cuda`), analyzed
+    into 20 scored candidates with real transcript-grounded reasons, one
+    approved and rendered.
+- **Publishing: code-complete, mocked-tested only.** No real YouTube or TikTok
+  account has been connected yet — that needs a registered developer app on
+  each platform (README "Connecting YouTube/TikTok"), which the user hasn't
+  set up. Don't claim it works against a real account until that's done.
 
-## In progress: import-by-URL (branch `clipforge/url-import`)
+## Gotchas (keep reading before you hit these)
 
-A separate worktree (`C:\Users\xalex\clipforge-url-import`) built a second import
-path: paste a link instead of browsing to a file (direct video URLs, and
-YouTube/TikTok/etc. via a new `yt-dlp` dependency). Implemented and verified in
-that worktree, on this same Windows PC, **today (2026-10-29)**, independently of
-the first-run runbook below:
+- **#1 (Windows): AppData isn't shared with Claude's sandbox.** ClipForge
+  keeps its DB/renders/models in `%LOCALAPPDATA%\ClipForge`. Always start
+  servers/setup via `explorer.exe <script>.cmd`, never a plain tool-call
+  process, or you get a second, empty data dir.
+- **#2: the backend does not hot-reload.** See "Current state" above — this
+  bit twice this session (a new API route returned 405 until the servers were
+  restarted; a code fix for the progress-bar bug didn't take effect until
+  restarted either). Always restart after a backend change, before claiming a
+  fix is "live".
+- **#3:** `CLIPFORGE_TRANSCRIBER=sidecar` reads `.srt/.vtt/.json` next to the
+  video instead of running Whisper — how tests/cloud sessions work without a
+  model. Default is `faster-whisper`.
+- **#4:** in a Bash tool call, `pkill -f` / `pgrep -f` match the tool's own
+  shell command line and kill it. Use PowerShell `Get-CimInstance Win32_Process`
+  + `Stop-Process -Id` by PID instead, or a `[b]racket` pattern.
+- **#5:** this Windows shell's PATH doesn't include ffmpeg by default even
+  after `winget install Gyan.FFmpeg` — prepend the WinGet package bin dir (see
+  "Tests" above) for any `pytest` run from a tool call.
+- **#6:** MCC's setup recognises its own hook by `sync-check.mjs` in the
+  command; ClipForge's script is `repo-sync.mjs` on purpose — don't rename it.
+- **#7:** schema changes: `alembic -c alembic.ini upgrade head` on a throwaway
+  `dev-clipforge.db`, then `revision --autogenerate`, then review and rename
+  the generated file to the next `000N_name.py` (autogenerate names it by hash).
 
-- Backend: `media/download.py` (URL classification, streaming download, yt-dlp),
-  `import_url` job in a new `download` worker lane, `POST
-  /api/projects/{id}/media/import-url`, `source_media.source_url` provenance
-  column + migration `0002_source_url`. Docs: `docs/decisions.md` D13,
-  `docs/architecture.md` ("Import by URL").
-- Frontend: `ImportDialog` has a "Paste a link" tab; `Project` page shows
-  in-progress link imports (no media row exists until the download finishes).
-- **Verified in that worktree's own venv** (`backend/.venv`, installed fresh
-  there — a separate venv from this checkout's, so the two sessions didn't
-  collide): full `pytest` **124 passed, 1 skipped** (the 23 new
-  `test_import_url.py` cases plus the existing 101); `alembic check` → no drift;
-  frontend `npm run typecheck` and `npm run build` clean.
-- **Verified live, end-to-end over real HTTP** (not just mocked tests): started
-  the backend on a scratch port/data dir, served a real small MP4 from a loopback
-  HTTP server, called `POST /api/projects/{id}/media/import-url` with
-  `{"url": "http://127.0.0.1:.../clip.mp4"}`, polled the job to `completed`, and
-  confirmed the resulting `source_media` row — correct probe info, `source_url`
-  set, file living at `<data dir>/downloads/<job_id>/clip.mp4`. Also checked the
-  error path: a bad URL returns `422 {"error":{"code":"INVALID_URL",...}}` in the
-  same shape the frontend already parses.
-- **Not yet verified:** a real YouTube/TikTok link through `yt-dlp` (mocked in
-  tests, and the direct-download path is what got the real-HTTP check above); the
-  "Paste a link" tab has not been clicked in an actual browser.
-- This is a PR, not yet merged to `main` — check whether it landed
-  (`git log --oneline -5` / `gh pr list`) before assuming import-by-URL exists on
-  whichever branch you're reading this from.
+## Last verified working (2026-10-29, this session, Windows PC)
 
-## First run on the Windows PC: the runbook
+- **Full pipeline, real video, real hardware** — see "Current state" above for
+  the summary; this is the first time any of milestone 1 ran outside a cloud
+  container.
+- **Import-by-URL, real YouTube:** paste-a-link → `yt-dlp` → real download →
+  import, after fixing the two bugs listed under "Uncommitted work" above.
+- **Delete-project:** backend cascade-deletes media/transcripts/candidates/
+  renders and the project's render-output folder; refuses while a job is
+  active; frontend two-click confirm verified live in the browser pane (native
+  `confirm()` silently no-ops there — don't use `window.confirm` anywhere in
+  this app, use `components/ConfirmButton.tsx`).
+- **Publishing — mocked only:** `test_publishing.py`, 20/20 passing — account
+  connect/reconnect/disconnect, request/cancel/retry, dedup of an active
+  publish for the same render+account, `ReauthRequired` flips the account to
+  `needs_reauth`, `PlatformNotSupported` (TikTok non-private) reports
+  `needs_action` without being retried like a transient failure, a `draft`
+  result is never reported as `published`, and restart recovery (crash
+  mid-upload → requeued → finishes on the next worker start) using the same
+  simulated-crash technique as `test_jobs.py`. UI verified live in the browser:
+  Settings → Integrations empty/configured states, Publishing Queue empty
+  state, the Review page's Publish box showing "no connected account" correctly
+  for the one real render that exists.
+- **Found and fixed while building publishing:** `ExportRecord` had no `render`
+  relationship despite `RenderedClip.exports` declaring `back_populates="render"`
+  — a latent bug that happened to never trigger SQLAlchemy's mapper validation
+  until new relationships were added elsewhere in the same module and forced
+  full registry configuration. Fixed (`db/models.py`); covered by the existing
+  test suite now actually exercising it.
 
-This has **never been done**. Do it in order, and record what you actually see
-here.
+## Decisions (made by Claude, NOT asked or confirmed by the user unless noted)
 
-1. **Get the code:** done by the option (a) steps above, which end with the repo
-   cloned at `C:\Users\xalex\clipforge`. If it's elsewhere, fix the path in
-   CLAUDE.md.
-2. **Prerequisites** (`setup.cmd` checks each one and prints the winget command):
-   - Python 3.12: `winget install Python.Python.3.12`
-   - FFmpeg: `winget install Gyan.FFmpeg`. Open a new terminal afterwards so PATH
-     updates.
-   - Node.js LTS: `winget install OpenJS.NodeJS.LTS`
-3. **Setup:** `explorer.exe "C:\Users\xalex\clipforge\setup.cmd"`, or the user
-   double-clicks it.
-   - It creates `backend\.venv`, installs packages, offers the CUDA libraries
-     (`-Gpu` = yes), builds the UI, installs the Claude sync hook and runs
-     `clipforge doctor`.
-   - ⚠ **The PowerShell scripts have never been executed** (no PowerShell in the
-     cloud). Expect small fixes on this first run.
-4. **Check `doctor` output:**
-   - `h264_nvenc` should say **OK**. In the cloud it said "Cannot load
-     libcuda.so.1", which was expected with no GPU.
-   - `CUDA` should say **1 CUDA device(s)**.
-   - If CUDA shows 0 while `nvidia-smi` works, suspect
-     `transcription/whisper.py` → `ensure_cuda_dll_dirs` first (never run on
-     Windows).
-5. **Tests:** `backend\.venv\Scripts\python -m pytest` in `backend\`. Expect 101
-   passed, 1 skipped. Then the real-Whisper test:
-   `set CLIPFORGE_TEST_WHISPER_MODEL=tiny.en` and `… -m pytest -m whisper`.
-6. **"Start it up":**
-   - `explorer.exe "C:\Users\xalex\clipforge\start-dev.cmd"`.
-   - Verify `:8765/api/health` reports `"worker":"running"` and :5173 answers.
-   - Open http://127.0.0.1:5173/ in the built-in browser pane.
-   - Settings → Diagnostics should show NVENC ✓ and the CUDA device.
-7. **A real end-to-end:**
-   - Import a real long video the user has rights to. The first transcription
-     downloads `small` (≈460 MB).
-   - Record: transcription time per hour of audio, the transcript's device
-     (`cuda`/`cpu`), and the render encoder (`h264_nvenc`?).
-   - Approve a clip, play it, export it, open the exported MP4.
-8. **Robustness:**
-   - Close the dev-server window mid-transcription and mid-render, start again,
-     and confirm the transcription resumes and the render re-runs.
-   - Rename a source file: it should show "missing" and relink should work.
-   - Paths with spaces and non-ASCII names.
-9. **Next Claude session on that PC** should begin with a "[ClipForge repo sync …]"
-   line. If not, run `npm run install-hook`.
-10. Update this file ("Current state" + "Last verified working"), then commit and
-    push.
-
-## Last verified working (2026-10-29, cloud session)
-
-- **Local-first audit (code inspection; nothing run on Windows):**
-  - The app makes no outbound network calls: no HTTP client imports, and the UI
-    only fetches relative `/api`. The server binds 127.0.0.1 only and rejects
-    requests addressed to other hosts.
-  - The only runtime internet use is faster-whisper's **one-time** model download
-    from huggingface.co. With no connection, `huggingface_hub` 2.3.0 falls back to
-    the cached model; only a failing *proxy* raises an error instead.
-  - Setup-time internet: pip, npm, winget. Dev-time: GitHub and the sync hook.
-    Neither is part of the app.
-  - No cloud backend, accounts or billing exist. Future SaaS pieces are
-    documentation only (`docs/architecture.md`, "seams").
-
-- **The standalone repo, from a fresh clone layout:**
-  - `scripts/setup-mac.sh` ran clean: venv, packages, `npm ci` + UI build, sync
-    hook, doctor.
-  - `pytest` from the repo's own `backend/.venv`: **101 passed, 1 skipped**
-    (101.6 s).
-- **`npm run dev`:**
-  - Both servers answered: `/api/health` → `{"ok":true,"worker":"running"}`, and
-    :5173 → 200, including `/api/health` proxied through :5173.
-  - Headless Chromium loaded the UI from :5173 with 0 console errors.
-  - **Bug found and fixed:** stopping the runner left Vite orphaned on :5173
-    (signalling `npm` doesn't reach `vite`). Children now get their own process
-    group and are stopped as a group, with SIGKILL after 5 s; Windows uses
-    `taskkill /T`.
-  - Re-tested two cases, and both left 0 processes and both ports closed:
-    - Ctrl+C to the runner;
-    - `kill -9` of the API (the runner then stopped the UI too).
-- **Sync hook** (`repo-sync.mjs`), against a local bare repo standing in for
-  GitHub plus a second clone as "the other machine": all 7 cases behaved as
-  designed.
-  - in sync → no change
-  - behind → fast-forward pull plus "re-read HANDOFF"
-  - ahead → pushed
-  - diverged → nothing changed, told to merge
-  - behind with uncommitted edits → nothing pulled, edits kept
-  - `frontend/package-lock.json` changed → "re-run setup" hint
-  - hook JSON (`SessionStart`) is well-formed
-- **Hook installer:** merged into a `settings.json` that already had MCC's
-  `sync-check.mjs` hook, leaving MCC's entry untouched; a re-run said "already
-  installed".
-- **Not verified:**
-  - `start-dev.cmd` / `setup.cmd` via `explorer.exe` on Windows;
-  - the Windows `taskkill` path;
-  - the hook against the real GitHub remote (it doesn't exist yet).
-
-**Milestone 1 itself (same day, before the move):**
-
-- **Automated tests:** `python -m pytest` in `backend/` gave **101
-  passed, 1 skipped** in 103 s.
-  - The skip is `test_real_whisper_transcribes_synthetic_speech`, which needs a
-    downloaded model.
-  - Test media is generated by ffmpeg at test time (test patterns + `flite`
-    synthetic speech, with an SRT timed to the exact sentence edges). No
-    third-party footage.
-  - `docs/implementation-plan.md` maps each of the 17 required test areas to its
-    tests.
-- **Full workflow in a real browser** (headless Chromium through Playwright
-  against `python -m clipforge serve` with `CLIPFORGE_TRANSCRIBER=sidecar`):
-  - Created "Demo Podcast" (podcast profile) and imported an 80 s synthetic-speech
-    video with its `.srt`.
-  - Transcribe and analyze both completed; 2 clips were found:
-    - #1 scored 72, 0:00–0:44. Its reasons: question followed by a 32 s answer;
-      ends on a finished sentence + 1.9 s pause; opens with a question.
-    - #2 scored 53, 0:47–1:20.
-  - Approve → a render job ran automatically → the "Rendered v1" player showed the
-    1080×1920 clip with yellow word-highlight captions. Encoder: libx264.
-  - Export wrote `.mp4` + `.json` + `.txt` into the chosen folder; the "Copy
-    caption" box appeared.
-  - Jobs page and Settings/Diagnostics rendered. **0 console errors.**
-- **A/V sync was measured, not assumed:** a flash + beep every 2 s, cut from 0.5 s.
-  The flash onsets were exactly [0.5, 2.5, 4.5, 6.5] s on the video frames, and the
-  beep onsets matched within the 5 ms measuring window.
-- **Hardware detection on a no-GPU machine:** NVENC and QSV are compiled into
-  ffmpeg but correctly reported as not working ("Cannot load libcuda.so.1", "Error
-  creating a MFX session: -9"), so renders fell back to libx264.
-- **Crash-resume:** a test transcriber made chunk 1 fail; the retry skipped
-  committed chunk 0 and finished (attempts = 2).
-- Bugs found and fixed while testing (all covered by tests now):
-  - a clip end could round 0.3 ms past the video's end;
-  - `safe_filename` treated `_etc_passwd` as a file extension;
-  - the review player cut off the bottom of 9:16 clips (the captions).
-
-## Decisions (made by Claude, NOT asked or confirmed by the user)
-
-All recorded with reasons in `docs/decisions.md` (D1–D12). Ask before relying on
-the big ones as if the user had agreed:
+All recorded with reasons in `docs/decisions.md` (D1–D14):
 
 - The UI is a localhost web page for now; Tauri was deferred.
 - A SQLite job queue (no Redis/Celery).
-- Default Whisper model `small`.
+- Default Whisper model `small`; `beam_size=1` (user asked for this one).
 - Approving a clip auto-renders it; export needs approval.
 - Silent videos get scene-based "weak" candidates and a silent audio track.
+- D13: import-by-URL is a scoped exception to "no outbound calls".
+- D14: publishing is a scoped exception to "no automatic publishing" — real
+  OAuth only, tokens in the OS keychain, `auto_publish` off by default per
+  account, TikTok limited to private drafts until the app is audited.
 
 ## Not verified yet / known limits
 
-1. **Real Whisper never ran.** Only a stand-in model was used (models couldn't be
-   downloaded). Covered by runbook steps 5 and 7.
-2. **NVENC never encoded:** only its detection and fallback logic were tested.
-   Runbook steps 4 and 7.
-3. **Windows scripts never executed** (`setup.cmd`, `start.cmd`, both `.ps1`
-   files). Neither was `ensure_cuda_dll_dirs`.
-4. **Face framing is untested on real faces:** the synthetic videos have none.
-   Only the crop math is tested.
-5. **Clip ranking is a heuristic baseline (`heuristic-v1`).** It scores structure
-   (hook, finished thought, energy…), not meaning. The UI says so.
-6. No speaker detection. Facecam and split-screen regions are set by hand.
-7. SRT/VTT imports have estimated word timings, so the highlight can drift within
-   a line.
-8. **No committed UI test:** the browser walkthrough was a one-off script.
+1. **Publishing against real accounts.** Everything is mocked-tested; no real
+   YouTube or TikTok OAuth client has been registered yet. Next session with
+   real credentials should do README's "Connecting YouTube/TikTok" then the
+   manual tests in `docs/implementation-plan.md` ("Publishing, real accounts").
+2. **Scheduled publishing isn't honoured.** `PublishJob.scheduled_for` exists
+   on the model/API; neither adapter reads it — both publish immediately.
+3. Real Whisper / NVENC are now verified (see above) — the old "never run on
+   Windows" caveats from the pre-repo-move era no longer apply.
+4. Face framing untested on real faces beyond the one MrBeast video (worked
+   there). Still a fixed per-clip crop, no tracking during the clip.
+5. **Clip ranking is a heuristic baseline (`heuristic-v1`).** No semantic
+   understanding — the UI and this file both say so on purpose.
+6. No speaker detection; facecam/split-screen regions are set by hand.
+7. SRT/VTT imports have estimated word timings (drift within a line).
+8. **No committed UI test** beyond today's manual browser-pane verification.
+9. TikTok adapter code is written against the documented API shape but has
+   never hit TikTok's real servers.
 
 ## What's next
 
-1. **On the Windows PC, in a local Claude Code session:** do the option (a) steps
-   in "Pending: create the GitHub repo" (create the repo with `gh`, split and push
-   from the Alfred branch, clone to `C:\Users\xalex\clipforge`).
-2. **First run on the Windows PC:** the runbook above, steps 1–10. Fix whatever
-   breaks in the setup scripts; record real Whisper speed and NVENC.
-3. **Milestone 2** (details in `docs/implementation-plan.md`). First item: a local
-   semantic re-ranker through Ollama (`analysis/semantic.py` is the plug-in point),
-   plus a small hand-labelled set of real videos to measure pick quality.
+1. **Decide what to commit and push.** See "Uncommitted work" above — probably
+   several logically separate commits, not one.
+2. **Publishing with real credentials** — see "Not verified yet" #1.
+3. **Milestone 2** (`docs/implementation-plan.md`): local semantic re-ranker
+   via Ollama, a hand-labelled real-video eval set, speaker turns, moving face
+   tracking, a timeline editor, the Tauri shell, a committed Playwright test.
+4. **Milestone 3 — Original Content Studio** (not started): script generation/
+   editing/series-continuity, TTS narration adapters, a background-visual
+   track system, reusing today's render/caption engine for original
+   (non-clipped) short-form video. A separate, large piece of work — came up
+   in the same conversation that asked for publishing, deliberately deferred.
+5. **Milestone 4 — Campaign Center** (not started): paid-clipping campaign
+   records, campaign-aware clip requirements, submission tracking, estimated-
+   vs-confirmed earnings analytics. Also deferred.

@@ -2,6 +2,7 @@ import { api } from "./api";
 import JobsPage from "./pages/Jobs";
 import Library from "./pages/Library";
 import ProjectPage from "./pages/Project";
+import PublishingQueuePage from "./pages/PublishingQueue";
 import ReviewPage from "./pages/Review";
 import SettingsPage from "./pages/Settings";
 import { useData, useHashRoute } from "./util";
@@ -15,6 +16,7 @@ export default function App() {
   if (page === "p" && id) body = <ProjectPage projectId={id} />;
   else if (page === "m" && id) body = <ReviewPage mediaId={id} />;
   else if (page === "jobs") body = <JobsPage />;
+  else if (page === "publish") body = <PublishingQueuePage />;
   else if (page === "settings") body = <SettingsPage />;
   else body = <Library />;
 
@@ -26,6 +28,7 @@ export default function App() {
         <nav className="nav">
           <a className={active("")} href="#/">Library</a>
           <a className={active("jobs")} href="#/jobs">Jobs</a>
+          <a className={active("publish")} href="#/publish">Publishing</a>
           <a className={active("settings")} href="#/settings">Settings</a>
         </nav>
         <div className="spacer" />

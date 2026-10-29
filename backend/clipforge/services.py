@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import os
+import secrets
 import shutil
 from datetime import datetime
 from pathlib import Path
@@ -15,12 +16,14 @@ from sqlalchemy.orm import Session
 from .captions.style import CaptionStyle
 from .context import AppContext
 from .db.models import (
-    CandidateClip, CaptionPresetRow, EditingProfileRow, ExportRecord, Project, RenderedClip,
-    SourceMedia, Transcript, utcnow,
+    CandidateClip, CaptionPresetRow, EditingProfileRow, ExportRecord, Job, Project, PublishAccount,
+    PublishJob, RenderedClip, SourceMedia, Transcript, utcnow,
 )
-from .errors import Conflict, InvalidPath, NotFound, SourceMissing, ValidationFailed
+from .errors import AccountNotConnected, Conflict, InvalidPath, NotFound, SourceMissing, ValidationFailed
 from .jobs import queue
 from .media import download
+from .publishing import adapter as publish_adapter
+from .publishing import credentials as publish_credentials
 from .media.paths import (
     ensure_output_dir, fingerprint, format_ts, from_relative, normalize_user_path, safe_filename,
     slugify, unique_path,
@@ -59,6 +62,28 @@ def create_project(ctx: AppContext, name: str, description: str = "", default_pr
         s.add(p)
         s.flush()
         return p
+
+
+def delete_project(ctx: AppContext, project_id: str) -> None:
+    """Delete a project and everything in it (media, transcripts, clips, renders).
+
+    Source footage is never touched — only ClipForge's own database rows and the
+    renders it produced. Refuses while a job for this project is still active, so
+    a worker never loses the rows it's mid-write on.
+    """
+    with ctx.session() as s:
+        p = get_or_404(s, Project, project_id, "Project")
+        active = s.scalar(
+            select(func.count()).select_from(Job).where(
+                Job.project_id == project_id, Job.status.in_(("queued", "running"))))
+        if active:
+            raise Conflict(
+                "This project has jobs still queued or running.",
+                hint="Wait for them to finish, or cancel them, then delete again.")
+        render_dir = render_output_dir(ctx, p)
+        s.delete(p)
+    if render_dir.is_dir():
+        shutil.rmtree(render_dir, ignore_errors=True)
 
 
 # --------------------------------------------------------------------------- media
@@ -355,6 +380,116 @@ def export_render(ctx: AppContext, render_id: str, folder: str | None = None) ->
         s.add(rec)
         s.flush()
         return rec
+
+
+# --------------------------------------------------------------------------- publishing
+def publish_authorize_url(ctx: AppContext, platform: str, redirect_uri: str) -> tuple[str, str]:
+    """Returns ``(url, state)``; the caller must round-trip ``state`` back
+    through the callback and reject a mismatch (CSRF protection)."""
+    state = secrets.token_urlsafe(24)
+    return publish_adapter(platform).authorize_url(ctx.settings, redirect_uri, state), state
+
+
+def connect_account(ctx: AppContext, platform: str, redirect_uri: str, code: str) -> PublishAccount:
+    token_data, info = publish_adapter(platform).exchange_code(ctx.settings, redirect_uri, code)
+    credential_key = f"{platform}:{info.external_account_id}"
+    publish_credentials.save_token(credential_key, token_data)
+    with ctx.session() as s:
+        acc = s.scalar(select(PublishAccount).where(
+            PublishAccount.platform == platform, PublishAccount.external_account_id == info.external_account_id))
+        if acc is None:
+            acc = PublishAccount(platform=platform, external_account_id=info.external_account_id,
+                                 credential_key=credential_key)
+            s.add(acc)
+        acc.display_name, acc.thumbnail_url = info.display_name, info.thumbnail_url
+        acc.scopes, acc.status, acc.connected_at = info.scopes, "connected", utcnow()
+        s.flush()
+        return acc
+
+
+def disconnect_account(ctx: AppContext, account_id: str) -> None:
+    with ctx.session() as s:
+        acc = get_or_404(s, PublishAccount, account_id, "Account")
+        publish_credentials.delete_token(acc.credential_key)
+        acc.status = "disconnected"
+
+
+def set_account_auto_publish(ctx: AppContext, account_id: str, auto_publish: bool) -> PublishAccount:
+    with ctx.session() as s:
+        acc = get_or_404(s, PublishAccount, account_id, "Account")
+        if auto_publish and acc.status != "connected":
+            raise AccountNotConnected(f"Reconnect the {acc.platform} account before enabling auto-publish.")
+        acc.auto_publish = auto_publish
+        s.flush()
+        return acc
+
+
+def request_publish(ctx: AppContext, render_id: str, account_id: str, *, title: str = "",
+                    description: str = "", tags: list[str] | None = None, privacy: str = "private",
+                    scheduled_for: datetime | None = None, scheduled_tz: str | None = None) -> PublishJob:
+    with ctx.session() as s:
+        r = get_or_404(s, RenderedClip, render_id, "Render")
+        if r.status != "completed":
+            raise Conflict("Only a completed render can be published.")
+        acc = get_or_404(s, PublishAccount, account_id, "Account")
+        if acc.status != "connected":
+            raise AccountNotConnected(
+                f"The {acc.platform} account “{acc.display_name}” isn't connected.",
+                hint="Reconnect it in Settings → Integrations.")
+        active = s.scalar(select(PublishJob).where(
+            PublishJob.render_id == render_id, PublishJob.account_id == account_id,
+            PublishJob.status.in_(("queued", "uploading"))))
+        if active:
+            return active
+        c = r.candidate
+        pj = PublishJob(render_id=render_id, account_id=account_id, platform=acc.platform,
+                        account_label=acc.display_name,
+                        title=title or c.post_title or "",
+                        description=description or (c.transcript_text or "")[:1000],
+                        tags=tags if tags is not None else list(c.post_hashtags or []),
+                        privacy=privacy, scheduled_for=scheduled_for, scheduled_tz=scheduled_tz)
+        s.add(pj)
+        s.flush()
+        pj_id, project_id, media_id, candidate_id = pj.id, c.media.project_id, c.media_id, c.id
+    job, _ = queue.enqueue(ctx.sf, kind="publish", lane="publish", payload={"publish_job_id": pj_id},
+                           dedupe_key=f"publish:{pj_id}", project_id=project_id, media_id=media_id,
+                           candidate_id=candidate_id)
+    with ctx.session() as s:
+        pj = s.get(PublishJob, pj_id)
+        pj.job_id = job.id
+        return pj
+
+
+def cancel_publish(ctx: AppContext, publish_job_id: str) -> PublishJob:
+    with ctx.session() as s:
+        pj = get_or_404(s, PublishJob, publish_job_id, "Publish job")
+        job_id = pj.job_id
+        if pj.status == "queued":
+            pj.status, pj.error_code, pj.error = "failed", "CANCELLED", "Cancelled before it started uploading."
+        s.flush()
+    if job_id:
+        queue.request_cancel(ctx.sf, job_id)
+    with ctx.session() as s:
+        return s.get(PublishJob, publish_job_id)
+
+
+def retry_publish(ctx: AppContext, publish_job_id: str) -> PublishJob:
+    with ctx.session() as s:
+        pj = get_or_404(s, PublishJob, publish_job_id, "Publish job")
+        if pj.status not in ("failed", "needs_action"):
+            raise Conflict("Only a failed publish job can be retried.")
+        if pj.account_id is None:
+            raise NotFound("The account for this publish job was removed.")
+        pj.status, pj.error_code, pj.error = "queued", None, None
+        pj_id, project_id, media_id, candidate_id = pj.id, pj.render.candidate.media.project_id, \
+            pj.render.candidate.media_id, pj.render.candidate.id
+    job, _ = queue.enqueue(ctx.sf, kind="publish", lane="publish", payload={"publish_job_id": pj_id},
+                           dedupe_key=f"publish:{pj_id}", project_id=project_id, media_id=media_id,
+                           candidate_id=candidate_id)
+    with ctx.session() as s:
+        pj = s.get(PublishJob, pj_id)
+        pj.job_id = job.id
+        return pj
 
 
 # --------------------------------------------------------------------------- presets

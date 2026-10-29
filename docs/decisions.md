@@ -112,3 +112,47 @@ tool for exactly this (resolving a page URL to a direct media stream across many
 sites), and reimplementing per-site extraction would be both more code and more
 fragile. ClipForge only uses it to fetch what the pasted URL already points to —
 it doesn't browse, search or authenticate on the user's behalf.
+
+## D14. Publishing — a provider-neutral queue, YouTube for real, TikTok drafts only
+
+Until now "No automatic publishing" meant nothing posted anywhere; export to a
+local folder was the last step. The user asked for the opposite of that by
+design: approve a clip and it should reach YouTube/TikTok with no further
+clicks, for accounts they've explicitly turned that on for. This is the
+"Publishing" seam `docs/architecture.md` had documented but never built.
+
+**What changed:** a `publish_accounts` / `publish_jobs` pair of tables
+(migration `0003`), a new `publish` job lane paired with the existing job queue
+(same retry/lease/crash-recovery machinery as `transcribe`/`render`/`import_url`
+— nothing publishing-specific was reinvented there), and `clipforge/publishing/`:
+a `PlatformAdapter` interface with a real YouTube Data API v3 adapter (OAuth 2.0,
+resumable `videos.insert`) and a TikTok Content Posting API adapter. OAuth tokens
+live in the OS credential store (`keyring`) via `credential_key` — the database
+only ever holds a lookup key, never a token. `PublishAccount.auto_publish`
+defaults to **off**; approving a clip only reaches a platform automatically once
+the user has explicitly flipped that on for that specific account (Settings →
+Integrations). A manual "Publish" action (Review page) works regardless, for
+accounts without auto-publish on.
+
+**Why YouTube is real and TikTok isn't (yet):** YouTube's OAuth + upload API has
+no review gate for an app's own account — register a client, it works. TikTok's
+Content Posting API requires TikTok to audit an app before it can Direct Post
+publicly; an unaudited app can still upload to the creator's **private inbox as a
+draft**, which is what the TikTok adapter does. It never reports a draft as
+published — `PublishJob.status` stays `draft` until the creator finishes posting
+it themselves in the TikTok app, which is TikTok's platform policy, not a
+ClipForge shortcut. Asking for `public`/`unlisted` privacy on TikTok raises
+`PlatformNotSupported` with that explained, instead of silently downgrading to
+a draft or pretending to honour the request.
+
+**What's still true:** nothing is published without the user first completing
+that platform's own OAuth consent screen in their own browser — no credential
+entry inside ClipForge, no session/cookie reuse, no browser automation posing as
+a human. `CLIPFORGE_YOUTUBE_CLIENT_ID`/`CLIPFORGE_TIKTOK_CLIENT_KEY` etc. are
+deployment config the user sets up once per machine after registering their own
+app with each platform (README "Connecting YouTube/TikTok") — ClipForge never
+ships or embeds platform credentials.
+
+**Not yet built** (tracked for the next phase, not silently skipped): the
+Original Content Studio and Campaign Center from the same request are a
+separate, much larger scope and are deferred — see `HANDOFF.md` "What's next".

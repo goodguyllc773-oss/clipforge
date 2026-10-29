@@ -99,6 +99,47 @@ export interface ExportRec {
   created_at?: string;
 }
 
+export type PublishStatus =
+  "queued" | "uploading" | "uploaded" | "draft" | "scheduled" | "published" | "failed" | "needs_action";
+
+export interface PublishJob {
+  id: string;
+  render_id: string;
+  account_id: string | null;
+  platform: "youtube" | "tiktok" | string;
+  account_label: string;
+  title: string;
+  description: string;
+  tags: string[];
+  privacy: "private" | "unlisted" | "public";
+  scheduled_for: string | null;
+  scheduled_tz: string | null;
+  status: PublishStatus;
+  platform_upload_id: string | null;
+  platform_post_id: string | null;
+  platform_post_url: string | null;
+  last_operation: string;
+  error_code: string | null;
+  error: string | null;
+  retry_count: number;
+  job_id: string | null;
+  published_at: string | null;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface PublishAccount {
+  id: string;
+  platform: "youtube" | "tiktok" | string;
+  external_account_id: string;
+  display_name: string;
+  thumbnail_url: string | null;
+  status: "connected" | "needs_reauth" | "disconnected";
+  scopes: string[];
+  auto_publish: boolean;
+  connected_at: string;
+}
+
 export interface Render {
   id: string;
   candidate_id: string;
@@ -119,6 +160,7 @@ export interface Render {
   settings: Record<string, unknown>;
   job_id: string | null;
   exports: ExportRec[];
+  publishes: PublishJob[];
   created_at: string;
 }
 

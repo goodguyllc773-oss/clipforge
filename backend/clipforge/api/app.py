@@ -8,13 +8,15 @@ import shutil
 import string
 import subprocess
 import sys
+import time
 from contextlib import asynccontextmanager
+from datetime import datetime
 from pathlib import Path
 from typing import Any
 
 from fastapi import Body, FastAPI, Query, Request
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import FileResponse, JSONResponse, Response
+from fastapi.responses import FileResponse, JSONResponse, RedirectResponse, Response
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 from sqlalchemy import func, select
@@ -24,7 +26,8 @@ from .. import __version__, services
 from ..config import Settings, load_settings
 from ..context import AppContext
 from ..db.models import (
-    CandidateClip, CaptionPresetRow, EditingProfileRow, Job, Project, RenderedClip, SourceMedia,
+    CandidateClip, CaptionPresetRow, EditingProfileRow, Job, Project, PublishAccount, PublishJob,
+    RenderedClip, SourceMedia,
 )
 from ..errors import ClipForgeError, InvalidPath, NotFound, ValidationFailed
 from ..jobs import queue
@@ -32,7 +35,9 @@ from ..jobs.worker import Worker
 from ..media import probe as probe_mod
 from ..media.ffmpeg import _CREATE_FLAGS, ffmpeg_version, resolve_binary
 from ..media.paths import normalize_user_path
-from .serialize import candidate_out, job_out, media_out, project_out, render_out
+from ..publishing import ADAPTERS
+from .serialize import candidate_out, job_out, media_out, project_out, publish_account_out, \
+    publish_job_out, render_out
 
 log = logging.getLogger("clipforge.api")
 
@@ -86,6 +91,20 @@ class ExportIn(BaseModel):
     folder: str | None = None
 
 
+class PublishIn(BaseModel):
+    account_id: str
+    title: str = ""
+    description: str = ""
+    tags: list[str] = []
+    privacy: str = "private"
+    scheduled_for: datetime | None = None
+    scheduled_tz: str | None = None
+
+
+class AccountPatch(BaseModel):
+    auto_publish: bool
+
+
 class PresetIn(BaseModel):
     key: str
     name: str = ""
@@ -113,6 +132,7 @@ def create_app(ctx: AppContext | None = None, *, settings: Settings | None = Non
         if worker:
             app.state.worker_started = worker.start()
         app.state.worker = worker
+        app.state.oauth_pending = {}  # state token -> (platform, expires_at monotonic)
         try:
             yield
         finally:
@@ -302,6 +322,11 @@ def create_app(ctx: AppContext | None = None, *, settings: Settings | None = Non
             s.flush()
             return project_out(p)
 
+    @app.delete("/api/projects/{project_id}", status_code=204)
+    def delete_project(project_id: str):
+        services.delete_project(C(), project_id)
+        return Response(status_code=204)
+
     # ------------------------------------------------------------------ media
     @app.post("/api/projects/{project_id}/media", status_code=201)
     def import_media(project_id: str, body: ImportIn):
@@ -436,6 +461,90 @@ def create_app(ctx: AppContext | None = None, *, settings: Settings | None = Non
         rec = services.export_render(C(), render_id, body.folder)
         return {"id": rec.id, "dest_path": rec.dest_path, "metadata_path": rec.metadata_path,
                 "post_metadata": rec.post_metadata}
+
+    # ------------------------------------------------------------------ publishing
+    OAUTH_STATE_TTL_S = 600.0
+
+    @app.get("/api/publish/platforms")
+    def publish_platforms():
+        c = C()
+        return {name: {"configured": bool(
+            (c.settings.youtube_client_id and c.settings.youtube_client_secret) if name == "youtube"
+            else (c.settings.tiktok_client_key and c.settings.tiktok_client_secret))}
+            for name in ADAPTERS}
+
+    @app.get("/api/publish/accounts")
+    def list_publish_accounts():
+        with C().session() as s:
+            return [publish_account_out(a) for a in
+                   s.scalars(select(PublishAccount).order_by(PublishAccount.platform)).all()]
+
+    @app.patch("/api/publish/accounts/{account_id}")
+    def patch_publish_account(account_id: str, body: AccountPatch):
+        return publish_account_out(services.set_account_auto_publish(C(), account_id, body.auto_publish))
+
+    @app.post("/api/publish/accounts/{account_id}/disconnect", status_code=204)
+    def disconnect_publish_account(account_id: str):
+        services.disconnect_account(C(), account_id)
+        return Response(status_code=204)
+
+    @app.get("/api/publish/{platform}/connect")
+    def publish_connect(platform: str):
+        redirect_uri = f"{C().settings.oauth_redirect_base}/api/publish/{platform}/callback"
+        url, state = services.publish_authorize_url(C(), platform, redirect_uri)
+        now = time.monotonic()
+        app.state.oauth_pending = {k: v for k, v in app.state.oauth_pending.items() if v[1] > now}
+        app.state.oauth_pending[state] = (platform, now + OAUTH_STATE_TTL_S)
+        return {"authorize_url": url}
+
+    @app.get("/api/publish/{platform}/callback")
+    def publish_callback(platform: str, code: str | None = None, state: str | None = None,
+                         error: str | None = None):
+        # Relative, not DEV_ORIGINS[0]: works whether the browser is on the Vite
+        # dev origin or the built UI served from this same process. The app's
+        # router only splits on "/" (no query-string parsing), so the result
+        # rides as an extra path segment, not a "?..." query.
+        pending = app.state.oauth_pending.pop(state, None) if state else None
+        if error:
+            return RedirectResponse(f"/#/settings/publish-err/{error}")
+        if not pending or pending[0] != platform or pending[1] < time.monotonic() or not code:
+            return RedirectResponse("/#/settings/publish-err/invalid_or_expired_state")
+        redirect_uri = f"{C().settings.oauth_redirect_base}/api/publish/{platform}/callback"
+        try:
+            acc = services.connect_account(C(), platform, redirect_uri, code)
+        except ClipForgeError as e:
+            return RedirectResponse(f"/#/settings/publish-err/{e.code}")
+        return RedirectResponse(f"/#/settings/publish-ok/{platform}:{acc.id}")
+
+    @app.post("/api/renders/{render_id}/publish", status_code=202)
+    def publish_render(render_id: str, body: PublishIn):
+        pj = services.request_publish(C(), render_id, body.account_id, title=body.title,
+                                      description=body.description, tags=body.tags, privacy=body.privacy,
+                                      scheduled_for=body.scheduled_for, scheduled_tz=body.scheduled_tz)
+        return publish_job_out(pj)
+
+    @app.get("/api/publish/jobs")
+    def list_publish_jobs(status: str | None = None, platform: str | None = None):
+        with C().session() as s:
+            q = select(PublishJob).order_by(PublishJob.created_at.desc())
+            if status:
+                q = q.where(PublishJob.status.in_(status.split(",")))
+            if platform:
+                q = q.where(PublishJob.platform == platform)
+            return [publish_job_out(p) for p in s.scalars(q).all()]
+
+    @app.get("/api/publish/jobs/{publish_job_id}")
+    def get_publish_job(publish_job_id: str):
+        with C().session() as s:
+            return publish_job_out(services.get_or_404(s, PublishJob, publish_job_id, "Publish job"))
+
+    @app.post("/api/publish/jobs/{publish_job_id}/cancel")
+    def cancel_publish_job(publish_job_id: str):
+        return publish_job_out(services.cancel_publish(C(), publish_job_id))
+
+    @app.post("/api/publish/jobs/{publish_job_id}/retry")
+    def retry_publish_job(publish_job_id: str):
+        return publish_job_out(services.retry_publish(C(), publish_job_id))
 
     # ------------------------------------------------------------------ jobs
     @app.get("/api/jobs")

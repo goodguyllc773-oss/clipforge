@@ -27,7 +27,7 @@ from .lock import FileLock
 
 log = logging.getLogger("clipforge.worker")
 
-DEFAULT_LANES = {"transcribe": 1, "media": 1, "download": 2}
+DEFAULT_LANES = {"transcribe": 1, "media": 1, "download": 2, "publish": 2}
 
 
 class JobContext:

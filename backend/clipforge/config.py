@@ -42,6 +42,17 @@ class Settings:
     poll_s: float = 1.0
     frontend_dist: Path | None = None
     extra_allowed_origins: tuple[str, ...] = field(default_factory=tuple)
+    # Publishing: OAuth client credentials for each platform. Set once per
+    # machine after the user registers their own app (Google Cloud Console /
+    # TikTok for Developers) — see README "Connecting YouTube/TikTok". Never
+    # committed; these are deployment config, not user data, so they live here
+    # rather than in the app_settings table.
+    youtube_client_id: str = ""
+    youtube_client_secret: str = ""
+    tiktok_client_key: str = ""
+    tiktok_client_secret: str = ""
+    # Base URL the OAuth callback is registered under with each platform.
+    oauth_redirect_base: str = "http://127.0.0.1:8765"
 
     # ---- data-dir layout -------------------------------------------------
     @property
@@ -104,6 +115,11 @@ def load_settings(**overrides) -> Settings:
         transcribe_chunk_s=float(env.get("CLIPFORGE_TRANSCRIBE_CHUNK_S", "600")),
         frontend_dist=Path(env["CLIPFORGE_FRONTEND_DIST"]) if env.get("CLIPFORGE_FRONTEND_DIST")
         else (repo_dist if repo_dist.is_dir() else None),
+        youtube_client_id=env.get("CLIPFORGE_YOUTUBE_CLIENT_ID", ""),
+        youtube_client_secret=env.get("CLIPFORGE_YOUTUBE_CLIENT_SECRET", ""),
+        tiktok_client_key=env.get("CLIPFORGE_TIKTOK_CLIENT_KEY", ""),
+        tiktok_client_secret=env.get("CLIPFORGE_TIKTOK_CLIENT_SECRET", ""),
+        oauth_redirect_base=env.get("CLIPFORGE_OAUTH_REDIRECT_BASE", "http://127.0.0.1:8765"),
     )
     values.update(overrides)
     if not isinstance(values["data_dir"], Path):
