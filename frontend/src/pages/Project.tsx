@@ -1,5 +1,6 @@
 import { useState } from "react";
 import { api } from "../api";
+import ConfirmButton from "../components/ConfirmButton";
 import ImportDialog from "../components/ImportDialog";
 import JobBar from "../components/JobBar";
 import type { Job, Media } from "../types";
@@ -15,6 +16,8 @@ export default function ProjectPage({ projectId }: { projectId: string }) {
   const urlImports = useData(
     () => api.jobs({ project_id: projectId, status: "queued,running", limit: 20 }), [projectId], 2000);
   const [importing, setImporting] = useState(false);
+  const [deleting, setDeleting] = useState(false);
+  const [deleteErr, setDeleteErr] = useState<string | null>(null);
   const p = project.data;
 
   if (project.error) return <div className="panel err">{project.error}</div>;
@@ -23,6 +26,18 @@ export default function ProjectPage({ projectId }: { projectId: string }) {
   const activeImports = (urlImports.data ?? []).filter((j) => j.kind === "import_url");
   const kick = () => { project.refresh(); recent.refresh(); urlImports.refresh(); };
 
+  const deleteProject = async () => {
+    setDeleting(true);
+    setDeleteErr(null);
+    try {
+      await api.deleteProject(projectId);
+      go("/");
+    } catch (e) {
+      setDeleteErr(errText(e));
+      setDeleting(false);
+    }
+  };
+
   return (
     <div className="col" style={{ gap: 18 }}>
       <div className="row between">
@@ -30,8 +45,15 @@ export default function ProjectPage({ projectId }: { projectId: string }) {
           <div className="muted small"><a href="#/">Projects</a> /</div>
           <h1>{p.name}</h1>
         </div>
-        <button className="primary" onClick={() => setImporting(true)}>+ Import video</button>
+        <div className="row">
+          <button className="primary" onClick={() => setImporting(true)}>+ Import video</button>
+          <ConfirmButton className="ghost bad" disabled={deleting} onConfirm={deleteProject}
+                         title="Source videos stay put — transcripts, clips and renders in this project are deleted for good">
+            {deleting ? "Deleting…" : "Delete project"}
+          </ConfirmButton>
+        </div>
       </div>
+      {deleteErr && <div className="err small">{deleteErr}</div>}
 
       {(recent.data ?? []).length > 0 && (
         <div className="panel col">

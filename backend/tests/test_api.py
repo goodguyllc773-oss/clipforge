@@ -109,6 +109,39 @@ def test_errors_are_structured(client, tmp_path):
     assert r.status_code == 200 and r.json()["whisper_model"] == "medium"
 
 
+def test_delete_project_removes_its_media_and_renders(client, ctx, talk_copy):
+    from clipforge import services
+    from clipforge.db.models import Project
+
+    pid = client.post("/api/projects", json={"name": "Deleteme"}).json()["id"]
+    media = client.post(f"/api/projects/{pid}/media", json={"path": str(talk_copy)}).json()
+    wait_jobs(client, media["id"])
+    cands = client.get(f"/api/media/{media['id']}/candidates").json()
+    best = max(cands, key=lambda c: c["score"])
+    client.post(f"/api/candidates/{best['id']}/review", json={"action": "approve"})
+    wait_jobs(client, media["id"])
+    with ctx.session() as s:
+        render_dir = services.render_output_dir(ctx, services.get_or_404(s, Project, pid, "Project"))
+    assert render_dir.is_dir() and any(render_dir.iterdir())
+
+    r = client.delete(f"/api/projects/{pid}")
+    assert r.status_code == 204
+    assert client.get(f"/api/projects/{pid}").status_code == 404
+    assert client.get(f"/api/media/{media['id']}/transcript").status_code == 404
+    assert not render_dir.is_dir()
+
+
+def test_delete_project_refuses_while_a_job_is_active(client, ctx):
+    from clipforge.db.models import Job
+
+    pid = client.post("/api/projects", json={"name": "Busy"}).json()["id"]
+    with ctx.session() as s:
+        s.add(Job(kind="transcribe", lane="transcribe", status="running", project_id=pid))
+    r = client.delete(f"/api/projects/{pid}")
+    assert r.status_code == 409 and r.json()["error"]["code"] == "CONFLICT"
+    assert client.get(f"/api/projects/{pid}").status_code == 200
+
+
 def test_rejects_foreign_host_header(client):
     r = client.get("/api/health", headers={"Host": "evil.example.com"})
     assert r.status_code == 400

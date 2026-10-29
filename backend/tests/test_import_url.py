@@ -7,6 +7,7 @@ from __future__ import annotations
 
 import builtins
 import http.server
+import sys
 import threading
 from pathlib import Path
 
@@ -73,6 +74,48 @@ def test_download_via_ytdlp_missing_dependency(monkeypatch, tmp_path):
         download.download_via_ytdlp("https://www.youtube.com/watch?v=x", tmp_path)
 
 
+def test_download_via_ytdlp_ignores_the_flaky_fragment_total_estimate(monkeypatch, tmp_path):
+    """For fragmented/HLS formats, yt-dlp recomputes `total_bytes_estimate` from
+    the *current* fragment's size on every hook call — while one large fragment
+    is mid-download, that freezes the estimate (and any ratio derived from it)
+    even as real bytes keep flowing. The hook must ignore that field and report
+    `done_bytes` alone (frac=None) so the caller can show real movement; a
+    genuine `total_bytes` (e.g. a plain progressive download) is still trusted."""
+    seen = []
+
+    class FakeYoutubeDL:
+        def __init__(self, opts):
+            self.opts = opts
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *a):
+            return False
+
+        def download(self, urls):
+            hook = self.opts["progress_hooks"][0]
+            # Fragmented download: total_bytes_estimate looks stuck near the
+            # same value across calls even as downloaded_bytes keeps growing.
+            hook({"status": "downloading", "downloaded_bytes": 1_000_000,
+                 "total_bytes_estimate": 10_000_000, "fragment_index": 9, "fragment_count": 10})
+            hook({"status": "downloading", "downloaded_bytes": 6_000_000,
+                 "total_bytes_estimate": 10_000_000, "fragment_index": 9, "fragment_count": 10})
+            # A real total_bytes (non-fragmented download) is still trusted.
+            hook({"status": "downloading", "downloaded_bytes": 8_000_000, "total_bytes": 10_000_000})
+            (tmp_path / "source.mp4").write_bytes(b"x" * 10)
+
+    fake_yt_dlp = type(sys)("yt_dlp")
+    fake_yt_dlp.YoutubeDL = FakeYoutubeDL
+    monkeypatch.setitem(sys.modules, "yt_dlp", fake_yt_dlp)
+
+    out = download.download_via_ytdlp("https://www.youtube.com/watch?v=x", tmp_path,
+                                      on_progress=lambda frac, done: seen.append((frac, done)))
+
+    assert out.name == "source.mp4"
+    assert seen == [(None, 1_000_000), (None, 6_000_000), (0.8, 8_000_000)]
+
+
 # --------------------------------------------------------------------------- download_direct (real loopback HTTP)
 class _Handler(http.server.BaseHTTPRequestHandler):
     body = b"not a real video, just bytes" * 10000
@@ -105,10 +148,11 @@ def http_server():
 
 def test_download_direct_streams_to_disk_with_progress(tmp_path, http_server):
     seen = []
-    out = download.download_direct(f"{http_server}/video.mp4", tmp_path, on_progress=seen.append)
+    out = download.download_direct(f"{http_server}/video.mp4", tmp_path,
+                                    on_progress=lambda frac, done: seen.append((frac, done)))
     assert out.name == "video.mp4"
     assert out.read_bytes() == _Handler.body
-    assert seen and seen[-1] == pytest.approx(1.0)
+    assert seen and seen[-1][0] == pytest.approx(1.0) and seen[-1][1] == len(_Handler.body)
     assert not out.with_name(out.name + ".part").exists()
 
 
@@ -160,7 +204,7 @@ def test_import_url_direct_download_and_import_succeeds(ctx, worker, media, monk
         dest = dest_dir / "downloaded.mp4"
         dest.write_bytes(media["talk"]["video"].read_bytes())
         if on_progress:
-            on_progress(1.0)
+            on_progress(1.0, dest.stat().st_size)
         return dest, "direct"
 
     monkeypatch.setattr(download, "fetch", fake_fetch)

@@ -97,7 +97,11 @@ class FasterWhisperTranscriber:
 
     def __init__(self, model_size: str = "small", device: str = "auto", compute_type: str = "auto",
                  download_root: str | None = None, language: str | None = None,
-                 beam_size: int = 5, vad_filter: bool = True, ffmpeg: str = "ffmpeg",
+                 # Greedy decoding (beam_size=1): faster-whisper's default beam_size=5
+                 # roughly doubled wall time for word-level-timestamp transcription
+                 # with little accuracy gain on clear speech — not worth it for a
+                 # local box without a huge GPU.
+                 beam_size: int = 1, vad_filter: bool = True, ffmpeg: str = "ffmpeg",
                  cuda_available: int | None = None):
         self.model_size = model_size
         self.device_pref = device

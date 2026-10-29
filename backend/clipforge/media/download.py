@@ -33,7 +33,10 @@ CHUNK = 1 << 20  # 1 MiB
 CONNECT_TIMEOUT_S = 30
 _ALLOWED_SCHEMES = {"http", "https"}
 
-ProgressFn = Callable[[float], None]
+# fraction is None when the source doesn't expose a total size (common for
+# fragmented/HLS formats) — callers still get `done_bytes` so they can show
+# live progress instead of an apparently frozen bar.
+ProgressFn = Callable[[float | None, int], None]
 CancelFn = Callable[[], None]  # raises JobCancelled if cancelled
 
 
@@ -87,8 +90,9 @@ def download_direct(url: str, dest_dir: Path, *, on_progress: ProgressFn | None 
                         break
                     f.write(chunk)
                     done += len(chunk)
-                    if on_progress and total_bytes:
-                        on_progress(min(1.0, done / total_bytes))
+                    if on_progress:
+                        frac = min(1.0, done / total_bytes) if total_bytes else None
+                        on_progress(frac, done)
     except JobCancelled:
         part.unlink(missing_ok=True)
         raise
@@ -138,10 +142,15 @@ def download_via_ytdlp(url: str, dest_dir: Path, *, on_progress: ProgressFn | No
                 cancelled["flag"] = True
                 raise
         if on_progress and d.get("status") == "downloading":
-            total = d.get("total_bytes") or d.get("total_bytes_estimate")
-            done = d.get("downloaded_bytes")
-            if total and done is not None:
-                on_progress(min(1.0, done / total))
+            done = d.get("downloaded_bytes") or 0
+            # Deliberately not `total_bytes_estimate`: for fragmented/HLS
+            # formats yt-dlp recomputes it from the *current* fragment's size
+            # each call, so while one large fragment is mid-download the
+            # estimate — and the ratio derived from it — stays frozen even as
+            # real bytes keep flowing. A real `total_bytes` (e.g. a plain
+            # progressive download) is trustworthy; the estimate isn't.
+            total = d.get("total_bytes")
+            on_progress(min(1.0, done / total) if total else None, done)
 
     opts = {
         "outtmpl": str(dest_dir / "source.%(ext)s"),

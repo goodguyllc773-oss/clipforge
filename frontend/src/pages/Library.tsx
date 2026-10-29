@@ -1,5 +1,6 @@
 import { useState } from "react";
 import { api } from "../api";
+import ConfirmButton from "../components/ConfirmButton";
 import { errText, go, useData } from "../util";
 
 export default function Library() {
@@ -43,7 +44,17 @@ export default function Library() {
       <div className="grid">
         {(projects.data ?? []).map((p) => (
           <div key={p.id} className="panel card col" onClick={() => go(`/p/${p.id}`)}>
-            <h2>{p.name}</h2>
+            <div className="row between">
+              <h2>{p.name}</h2>
+              <ConfirmButton
+                title="Delete project and everything in it"
+                onConfirm={async () => {
+                  try { await api.deleteProject(p.id); projects.refresh(); } catch (err) { setErr(errText(err)); }
+                }}
+              >
+                Delete
+              </ConfirmButton>
+            </div>
             <div className="muted small">{p.media_count ?? 0} video(s) · default profile {p.default_profile_key}</div>
             <div className="muted small">updated {new Date(p.updated_at).toLocaleString()}</div>
           </div>
