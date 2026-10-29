@@ -27,7 +27,8 @@ def media_out(m: SourceMedia, *, counts: dict | None = None, transcript: Transcr
         "height": m.height, "fps": m.fps, "video_codec": m.video_codec, "container": m.container,
         "has_audio": m.has_audio, "audio_codec": m.audio_codec, "audio_channels": m.audio_channels,
         "sample_rate": m.sample_rate, "rotation": m.rotation, "profile_key": m.profile_key,
-        "transcript_path": m.transcript_path, "browser_playable": ext in BROWSER_PLAYABLE,
+        "transcript_path": m.transcript_path, "source_url": m.source_url,
+        "browser_playable": ext in BROWSER_PLAYABLE,
         "candidate_counts": counts or {},
         "transcript": None if transcript is None else {
             "id": transcript.id, "engine": transcript.engine, "model": transcript.model,

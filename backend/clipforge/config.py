@@ -69,11 +69,18 @@ class Settings:
         return self.data_dir / "renders"
 
     @property
+    def downloads_dir(self) -> Path:
+        """Import-by-URL: fetched files land here and stay (they become the
+        media's ``original_path``, same as a locally-browsed file)."""
+        return self.data_dir / "downloads"
+
+    @property
     def lock_path(self) -> Path:
         return self.data_dir / "worker.lock"
 
     def ensure_dirs(self) -> None:
-        for d in (self.data_dir, self.logs_dir, self.models_dir, self.cache_dir, self.renders_dir):
+        for d in (self.data_dir, self.logs_dir, self.models_dir, self.cache_dir, self.renders_dir,
+                  self.downloads_dir):
             d.mkdir(parents=True, exist_ok=True)
 
 

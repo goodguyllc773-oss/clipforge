@@ -18,7 +18,7 @@ export interface Project {
 
 export interface Job {
   id: string;
-  kind: "transcribe" | "analyze" | "render" | string;
+  kind: "transcribe" | "analyze" | "render" | "import_url" | string;
   lane: string;
   status: JobStatus;
   stage: string;
@@ -72,6 +72,7 @@ export interface Media {
   rotation: number;
   profile_key: string;
   transcript_path: string | null;
+  source_url: string | null;
   browser_playable: boolean;
   candidate_counts: Partial<Record<ReviewStatus, number>>;
   transcript: TranscriptInfo | null;

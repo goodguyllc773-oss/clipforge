@@ -20,6 +20,7 @@ from .db.models import (
 )
 from .errors import Conflict, InvalidPath, NotFound, SourceMissing, ValidationFailed
 from .jobs import queue
+from .media import download
 from .media.paths import (
     ensure_output_dir, fingerprint, format_ts, from_relative, normalize_user_path, safe_filename,
     slugify, unique_path,
@@ -62,7 +63,8 @@ def create_project(ctx: AppContext, name: str, description: str = "", default_pr
 
 # --------------------------------------------------------------------------- media
 def import_media(ctx: AppContext, project_id: str, raw_path: str, *, profile_key: str | None = None,
-                 auto_process: bool = True, transcript_path: str | None = None) -> tuple[SourceMedia, list[str]]:
+                 auto_process: bool = True, transcript_path: str | None = None,
+                 source_url: str | None = None) -> tuple[SourceMedia, list[str]]:
     path = normalize_user_path(raw_path)
     info = probe(path, ffprobe=ctx.settings.ffprobe)  # raises InvalidMedia with a hint
     tpath = None
@@ -87,7 +89,7 @@ def import_media(ctx: AppContext, project_id: str, raw_path: str, *, profile_key
             duration_s=info.duration_s, width=info.display_width, height=info.display_height,
             fps=info.fps, video_codec=info.video_codec, rotation=info.rotation, has_audio=info.has_audio,
             audio_codec=info.audio_codec, audio_channels=info.audio_channels, sample_rate=info.sample_rate,
-            probe=info.summary(), profile_key=key, transcript_path=tpath,
+            probe=info.summary(), profile_key=key, transcript_path=tpath, source_url=source_url,
         )
         s.add(m)
         s.flush()
@@ -97,6 +99,23 @@ def import_media(ctx: AppContext, project_id: str, raw_path: str, *, profile_key
         jobs.append(start_processing(ctx, media_id).id)
     with ctx.session() as s:
         return s.get(SourceMedia, media_id), jobs
+
+
+def import_media_from_url(ctx: AppContext, project_id: str, raw_url: str, *, profile_key: str | None = None,
+                          auto_process: bool = True):
+    """Queue an import from a pasted link (direct file URL, or a page resolved
+    via yt-dlp). See ``jobs/handlers.py::handle_import_url`` and
+    ``docs/decisions.md`` D13."""
+    url = download.validate_url(raw_url)
+    with ctx.session() as s:
+        project = get_or_404(s, Project, project_id, "Project")
+        key = profile_key or project.default_profile_key
+        ctx.profile(key, s)
+    job, _ = queue.enqueue(ctx.sf, kind="import_url", lane="download",
+                           payload={"project_id": project_id, "url": url, "profile_key": profile_key,
+                                    "auto_process": auto_process},
+                           dedupe_key=f"import_url:{project_id}:{url}", project_id=project_id)
+    return job
 
 
 def start_processing(ctx: AppContext, media_id: str, *, force_transcribe: bool = False):

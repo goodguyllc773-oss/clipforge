@@ -52,9 +52,11 @@ open start-dev.command              # dev servers (or: npm run dev)
 ## Use
 
 1. **Library** → create a project (pick a default editing profile).
-2. **Import video** → browse to the file (or paste its full path). Optionally attach an
-   existing `.srt` / `.vtt` to skip Whisper. ClipForge never copies or modifies the
-   source.
+2. **Import video** → browse to the file (or paste its full path), or switch to
+   **Paste a link** to import from a direct video URL or a YouTube/TikTok/etc. link
+   (fetched with `yt-dlp`; see "Import by URL" below). Optionally attach an
+   existing `.srt` / `.vtt` to skip Whisper. ClipForge never copies or modifies a
+   local source; a pasted link is downloaded once and then treated the same way.
 3. Wait for *Transcribing* → *Finding clips* (progress bars; cancellable).
 4. **Review clips**: watch the source range or the render, read *Why this clip*,
    nudge boundaries, change profile / layout / caption style, **Approve** (renders
@@ -88,6 +90,22 @@ Data lives in `%LOCALAPPDATA%\ClipForge` (Windows) / `~/.local/share/clipforge`
 Docs: `docs/architecture.md` (modules, data model, job state machine),
 `docs/decisions.md` (why things are the way they are),
 `docs/implementation-plan.md` (status checklist, tests, next milestone).
+
+## Import by URL
+
+Paste a link instead of browsing to a file. A direct link to a video file (ending
+`.mp4`, `.mov`, etc.) is downloaded straight to disk; anything else (a YouTube,
+TikTok, or other page URL) is resolved and fetched with `yt-dlp`, restricted to
+the single link pasted — never a whole channel or playlist. The download runs as
+a background job (Jobs page shows its progress) and, once it completes, feeds
+into the exact same pipeline as a locally-browsed file. This is the one place
+ClipForge makes an outbound network call other than the one-time Whisper model
+download — see `docs/decisions.md` D13 for the reasoning and what's still true
+(no scraping, no scheduled or automatic fetching).
+
+`yt-dlp` is installed automatically by `setup.cmd` / `scripts/setup-mac.sh` (it's
+a regular backend dependency, in `backend/pyproject.toml`); no extra prerequisite
+to install by hand.
 
 ## Known limitations
 

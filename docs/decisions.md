@@ -80,3 +80,35 @@ silent AAC track because some platforms reject video-only uploads.
 Approving a clip without a completed render queues one (deduplicated). Export is
 only enabled for approved clips, and always writes a new file (`name (2).mp4`) next
 to a `.json` with post metadata and a `.txt` caption. Nothing is published.
+
+## D13. Import by URL — a deliberate, scoped exception to "no outbound calls"
+Until now the verified guarantee was "no outbound network calls except the
+one-time Whisper model download." The user asked for a second way to import: paste
+a link instead of browsing to a local file, including YouTube/TikTok/etc. links,
+not just direct video URLs. That requires ClipForge to fetch something from the
+network — so this is a new, narrow exception, not a reversal of the rule.
+
+**What changed:** `POST /api/projects/{id}/media/import-url` enqueues an
+`import_url` job (lane `download`, so it never blocks transcription or rendering).
+The job classifies the URL (`media/download.py`): a path ending in a supported
+video extension is fetched directly with a streaming HTTP download; anything else
+(YouTube, TikTok, a page that embeds a player, a CDN link with no extension) is
+resolved and fetched through `yt-dlp`, a new backend dependency. The downloaded
+file lands under `<data dir>/downloads/<job_id>/` and becomes that media's
+`original_path`, exactly like a locally-browsed file — probed, fingerprinted, and
+fed into the same `import_media` use-case. The source URL is kept on the
+`source_media` row (`source_url`) as provenance, never as something ClipForge
+re-fetches on its own later.
+
+**What's still true:** a network fetch happens **only** when the user pastes a URL
+into the import dialog and submits it — nothing runs on a schedule, nothing crawls
+a channel or playlist for more videos, and there is no general scraping. `yt-dlp`
+is invoked exactly once per pasted link, for that link only. The existing
+local-path import is unchanged and remains the default. Downloaded footage is
+still never modified after the fact — same as footage the user points at directly.
+
+**Why `yt-dlp` and not a hand-rolled extractor:** it is the maintained, widely used
+tool for exactly this (resolving a page URL to a direct media stream across many
+sites), and reimplementing per-site extraction would be both more code and more
+fragile. ClipForge only uses it to fetch what the pasted URL already points to —
+it doesn't browse, search or authenticate on the user's behalf.

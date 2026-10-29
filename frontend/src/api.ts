@@ -51,6 +51,8 @@ export const api = {
 
   importMedia: (projectId: string, b: { path: string; profile_key?: string; transcript_path?: string | null }) =>
     post<Media & { job_ids: string[] }>(`/api/projects/${projectId}/media`, b),
+  importMediaUrl: (projectId: string, b: { url: string; profile_key?: string; auto_process?: boolean }) =>
+    post<Job>(`/api/projects/${projectId}/media/import-url`, b),
   media: (id: string) => get<Media>(`/api/media/${id}`),
   candidates: (mediaId: string) => get<Candidate[]>(`/api/media/${mediaId}/candidates`),
   transcribe: (mediaId: string, force = false) => post<Job>(`/api/media/${mediaId}/transcribe?force=${force}`),

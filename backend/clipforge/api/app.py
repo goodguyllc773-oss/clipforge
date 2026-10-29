@@ -62,6 +62,12 @@ class ImportIn(BaseModel):
     transcript_path: str | None = None
 
 
+class ImportUrlIn(BaseModel):
+    url: str
+    profile_key: str | None = None
+    auto_process: bool = True
+
+
 class RelinkIn(BaseModel):
     path: str
     force: bool = False
@@ -302,6 +308,14 @@ def create_app(ctx: AppContext | None = None, *, settings: Settings | None = Non
         m, jobs = services.import_media(C(), project_id, body.path, profile_key=body.profile_key,
                                         auto_process=body.auto_process, transcript_path=body.transcript_path)
         return {**media_out(m), "job_ids": jobs}
+
+    @app.post("/api/projects/{project_id}/media/import-url", status_code=202)
+    def import_media_from_url(project_id: str, body: ImportUrlIn):
+        """Paste-a-link import: queues a download (lane 'download'), then the usual
+        import pipeline. Async because downloads can be slow or large — poll the
+        returned job, which carries ``result.media_id`` once it completes."""
+        return job_out(services.import_media_from_url(C(), project_id, body.url, profile_key=body.profile_key,
+                                                       auto_process=body.auto_process))
 
     @app.get("/api/media/{media_id}")
     def get_media(media_id: str):

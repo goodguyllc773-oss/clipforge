@@ -176,9 +176,12 @@ generated file. `alembic -c alembic.ini check` must report no drift.
 
 - **Source footage is never modified, moved or deleted.** It's only ever an ffmpeg
   input. Raw footage and renders stay local by default.
-- **No unauthorized sourcing:** no scraping, no downloading arbitrary third-party
-  videos, no getting around access controls, no credential harvesting. Future
-  source connectors use creator-authorised sources and official integrations only.
+- **No unauthorized sourcing:** no scraping, no getting around access controls, no
+  credential harvesting. The one scoped exception is import-by-URL (`docs/decisions.md`
+  D13): ClipForge fetches a video **only** from a URL the user explicitly pastes into
+  the import dialog, once, for that link — never on a schedule, never crawling a
+  channel/playlist for more. Future source connectors use creator-authorised sources
+  and official integrations only.
 - **No automatic publishing.** Future publishing uses official platform APIs with
   tokens in the OS keychain, never in the repo or the database in plain text.
 - **No paid services or recurring costs** without an explicit need and the user's

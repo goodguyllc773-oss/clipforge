@@ -18,6 +18,7 @@ dependencies = [
     "numpy>=1.26,<3",
     "opencv-python-headless>=4.9,<6",
     "faster-whisper>=1.1,<2",
+    "yt-dlp>=2024.8,<2026",
 ]
 
 [project.optional-dependencies]

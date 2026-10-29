@@ -10,13 +10,18 @@ export default function ProjectPage({ projectId }: { projectId: string }) {
   const project = useData(() => api.project(projectId), [projectId], 2000);
   const profiles = useData(() => api.profiles(), []);
   const recent = useData(() => api.jobs({ project_id: projectId, status: "failed", limit: 5 }), [projectId], 4000);
+  // import_url jobs have no media row yet while they download, so they're tracked
+  // here rather than nested under a MediaRow.
+  const urlImports = useData(
+    () => api.jobs({ project_id: projectId, status: "queued,running", limit: 20 }), [projectId], 2000);
   const [importing, setImporting] = useState(false);
   const p = project.data;
 
   if (project.error) return <div className="panel err">{project.error}</div>;
   if (!p) return <div className="muted">Loading…</div>;
 
-  const kick = () => { project.refresh(); recent.refresh(); };
+  const activeImports = (urlImports.data ?? []).filter((j) => j.kind === "import_url");
+  const kick = () => { project.refresh(); recent.refresh(); urlImports.refresh(); };
 
   return (
     <div className="col" style={{ gap: 18 }}>
@@ -32,6 +37,18 @@ export default function ProjectPage({ projectId }: { projectId: string }) {
         <div className="panel col">
           <h3>Recent failures</h3>
           {recent.data!.map((j) => <FailedJob key={j.id} job={j} onRetry={kick} />)}
+        </div>
+      )}
+
+      {activeImports.length > 0 && (
+        <div className="panel col">
+          <h3>Importing from a link</h3>
+          {activeImports.map((j) => (
+            <div key={j.id} className="col" style={{ gap: 2 }}>
+              <div className="mono small muted">{String(j.payload?.url ?? "")}</div>
+              <JobBar job={j} onChange={kick} />
+            </div>
+          ))}
         </div>
       )}
 

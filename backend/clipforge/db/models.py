@@ -91,6 +91,9 @@ class SourceMedia(TimestampMixin, Base):
     profile_key: Mapped[str] = mapped_column(String(64), nullable=False)
     # Optional user-supplied transcript (.srt/.vtt/.json) used instead of Whisper.
     transcript_path: Mapped[str | None] = mapped_column(Text, nullable=True)
+    # Set only when this media came in through import-by-URL: the link the user
+    # pasted. Provenance only — never used to re-fetch automatically.
+    source_url: Mapped[str | None] = mapped_column(Text, nullable=True)
 
     project: Mapped[Project] = relationship(back_populates="media")
     transcripts: Mapped[list[Transcript]] = relationship(

@@ -89,8 +89,10 @@ Steps (run them yourself, in this order; don't hand them to the user):
   - Mac: `~/Library/Application Support/ClipForge`
   - Override with `CLIPFORGE_DATA_DIR`.
   - It holds the DB, renders, models, cache and logs. **Not in git.**
-- **Database:** one Alembic migration, `0001_initial_schema`, applied automatically
-  on start. `alembic check` reported no drift.
+- **Database:** two Alembic migrations, `0001_initial_schema` and `0002_source_url`
+  (adds `source_media.source_url`, for import-by-URL), applied automatically on
+  start. `alembic check` reported no drift (verified in the `clipforge/url-import`
+  worktree below).
 - **Per-machine setup (git doesn't carry it):**
   - `backend/.venv`, `frontend/node_modules`, `frontend/dist`, the Whisper model,
     and the Claude sync hook in `~/.claude/settings.json`.
@@ -125,6 +127,41 @@ Steps (run them yourself, in this order; don't hand them to the user):
 - **Gotcha #8:** MCC's setup recognises its hook by `sync-check.mjs` in the
   command, so ClipForge's script is `repo-sync.mjs` and its installer matches
   `repo-sync.mjs` + `clipforge`. Don't rename either to `sync-check.mjs`.
+
+## In progress: import-by-URL (branch `clipforge/url-import`)
+
+A separate worktree (`C:\Users\xalex\clipforge-url-import`) built a second import
+path: paste a link instead of browsing to a file (direct video URLs, and
+YouTube/TikTok/etc. via a new `yt-dlp` dependency). Implemented and verified in
+that worktree, on this same Windows PC, **today (2026-10-29)**, independently of
+the first-run runbook below:
+
+- Backend: `media/download.py` (URL classification, streaming download, yt-dlp),
+  `import_url` job in a new `download` worker lane, `POST
+  /api/projects/{id}/media/import-url`, `source_media.source_url` provenance
+  column + migration `0002_source_url`. Docs: `docs/decisions.md` D13,
+  `docs/architecture.md` ("Import by URL").
+- Frontend: `ImportDialog` has a "Paste a link" tab; `Project` page shows
+  in-progress link imports (no media row exists until the download finishes).
+- **Verified in that worktree's own venv** (`backend/.venv`, installed fresh
+  there — a separate venv from this checkout's, so the two sessions didn't
+  collide): full `pytest` **124 passed, 1 skipped** (the 23 new
+  `test_import_url.py` cases plus the existing 101); `alembic check` → no drift;
+  frontend `npm run typecheck` and `npm run build` clean.
+- **Verified live, end-to-end over real HTTP** (not just mocked tests): started
+  the backend on a scratch port/data dir, served a real small MP4 from a loopback
+  HTTP server, called `POST /api/projects/{id}/media/import-url` with
+  `{"url": "http://127.0.0.1:.../clip.mp4"}`, polled the job to `completed`, and
+  confirmed the resulting `source_media` row — correct probe info, `source_url`
+  set, file living at `<data dir>/downloads/<job_id>/clip.mp4`. Also checked the
+  error path: a bad URL returns `422 {"error":{"code":"INVALID_URL",...}}` in the
+  same shape the frontend already parses.
+- **Not yet verified:** a real YouTube/TikTok link through `yt-dlp` (mocked in
+  tests, and the direct-download path is what got the real-HTTP check above); the
+  "Paste a link" tab has not been clicked in an actual browser.
+- This is a PR, not yet merged to `main` — check whether it landed
+  (`git log --oneline -5` / `gh pr list`) before assuming import-by-URL exists on
+  whichever branch you're reading this from.
 
 ## First run on the Windows PC: the runbook
 

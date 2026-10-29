@@ -69,6 +69,21 @@ class RenderFailed(ClipForgeError):
     retryable = True
 
 
+class InvalidUrl(ClipForgeError):
+    code = "INVALID_URL"
+    http_status = 422
+
+
+class DownloadFailed(ClipForgeError):
+    code = "DOWNLOAD_FAILED"
+    retryable = True
+
+
+class UnsupportedSource(ClipForgeError):
+    code = "UNSUPPORTED_SOURCE"
+    http_status = 422
+
+
 class TranscriptionFailed(ClipForgeError):
     code = "TRANSCRIPTION_FAILED"
     retryable = True

@@ -15,6 +15,14 @@ Last updated with milestone 1 (vertical slice).
   missing files, relative paths — each with a code + hint
 - ✅ Duplicate import of the same file into a project is refused (fingerprint)
 - ✅ Missing ffmpeg/ffprobe → `DEPENDENCY_MISSING` with install instructions
+- ✅ **Import by URL** (`POST /api/projects/{id}/media/import-url`, job kind
+  `import_url`, lane `download`): direct video-file links stream straight to disk;
+  everything else resolves and downloads via `yt-dlp` (single link only, no
+  playlists). Codes: `INVALID_URL`, `DOWNLOAD_FAILED` (retryable), `UNSUPPORTED_SOURCE`,
+  `DEPENDENCY_MISSING` (yt-dlp missing). Source URL kept as provenance
+  (`source_media.source_url`). Covered by `test_import_url.py` with the downloader
+  mocked (no real network in CI); not yet exercised against a real YouTube/TikTok
+  link or a real CDN file — do that once on the Windows machine.
 
 ### B. Transcription
 - 🟡 faster-whisper engine: chunked PCM over a pipe, word timestamps, VAD, CUDA→CPU
@@ -96,7 +104,9 @@ Last updated with milestone 1 (vertical slice).
 ## Automated tests (pytest)
 
 `101 passed, 1 skipped` in ~105 s on a 4-core container (Python 3.13, FFmpeg 6.1.1,
-no GPU). Mapping to the required list:
+no GPU), plus 23 more for import-by-URL (`test_import_url.py`, added 2026-10-29):
+`124 passed, 1 skipped` in ~62 s, verified on the Windows PC. Mapping to the
+required list:
 
 | # | Requirement | Where |
 |---|---|---|
@@ -117,6 +127,7 @@ no GPU). Mapping to the required list:
 | 15 | Review-state transitions | `test_review.py` |
 | 16 | Missing source files | `test_paths.py::test_missing_source_is_detected_and_relinked` |
 | 17 | Safe output naming / paths | `test_paths.py` |
+| 18 | Import by URL (classification, download, failure codes) | `test_import_url.py` |
 
 Fixtures are generated with ffmpeg at test time (test patterns + `flite` synthetic
 speech), so no third-party footage is involved.
@@ -134,6 +145,9 @@ speech), so no third-party footage is involved.
 7. Paths with spaces, non-ASCII names, a source on an external drive that is then
    unplugged (→ "missing" + relink).
 8. Upload an exported clip to TikTok/Reels drafts: check captions stay clear of the UI.
+9. Import by URL against the real internet: a direct CDN `.mp4` link, and a real
+   YouTube and TikTok link — confirm `yt-dlp` resolves them and the result feeds
+   cleanly into transcription.
 
 ## Next milestone (M2) — make the picks good and the loop fast
 

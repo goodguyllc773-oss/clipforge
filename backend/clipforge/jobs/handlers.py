@@ -8,6 +8,7 @@
 
 from __future__ import annotations
 
+import shutil
 from pathlib import Path
 
 from sqlalchemy import delete, func, select
@@ -16,10 +17,11 @@ from ..analysis.candidates import generate_candidates, overlap_fraction
 from ..analysis.framing import summarize_faces
 from ..analysis.signals import Loudness, cache_json, compute_loudness, detect_scenes, plan_chunks
 from ..db.models import (
-    AnalysisRun, CandidateClip, RenderedClip, SourceMedia, Transcript, TranscriptChunk,
+    AnalysisRun, CandidateClip, Project, RenderedClip, SourceMedia, Transcript, TranscriptChunk,
     TranscriptSegment, utcnow,
 )
 from ..errors import ClipForgeError, JobCancelled, NotFound
+from ..media import download
 from ..media.paths import format_ts, slugify, to_relative
 from ..render.renderer import RenderRequest, render_clip
 from .. import services
@@ -266,6 +268,38 @@ def handle_render(ctx: JobContext) -> dict:
             "duration_s": out.duration_s, "warnings": out.warnings}
 
 
-HANDLERS = {"transcribe": handle_transcribe, "analyze": handle_analyze, "render": handle_render}
+# --------------------------------------------------------------------------- import by URL
+def handle_import_url(ctx: JobContext) -> dict:
+    """Download a pasted link, then feed it into the same ``import_media`` use-case
+    as a locally-browsed file. See ``media/download.py`` and ``docs/decisions.md`` D13."""
+    app = ctx.app
+    project_id = ctx.payload["project_id"]
+    url = ctx.payload["url"]
+    profile_key = ctx.payload.get("profile_key")
+    auto_process = ctx.payload.get("auto_process", True)
+
+    with app.session() as s:
+        if s.get(Project, project_id) is None:
+            raise NotFound("Project was deleted.", code="PROJECT_GONE")
+
+    dest_dir = app.settings.downloads_dir / ctx.job_id
+    ctx.stage("Resolving link", 0.0)
+    try:
+        path, kind = download.fetch(
+            url, dest_dir,
+            on_progress=lambda f: ctx.progress(0.05 + 0.85 * f),
+            cancel_check=ctx.check)
+        ctx.event(f"Downloaded via {'direct link' if kind == 'direct' else 'yt-dlp'}.")
+        ctx.stage("Importing", 0.92)
+        m, jobs = services.import_media(app, project_id, str(path), profile_key=profile_key,
+                                        auto_process=auto_process, source_url=url)
+    except BaseException:
+        shutil.rmtree(dest_dir, ignore_errors=True)
+        raise
+    return {"media_id": m.id, "job_ids": jobs, "source_url": url, "kind": kind}
+
+
+HANDLERS = {"transcribe": handle_transcribe, "analyze": handle_analyze, "render": handle_render,
+           "import_url": handle_import_url}
 
 __all__ = ["HANDLERS", "queue"]

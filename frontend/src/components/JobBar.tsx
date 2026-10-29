@@ -1,7 +1,9 @@
 import { api } from "../api";
 import type { Job } from "../types";
 
-const LABEL: Record<string, string> = { transcribe: "Transcribing", analyze: "Finding clips", render: "Rendering" };
+const LABEL: Record<string, string> = {
+  transcribe: "Transcribing", analyze: "Finding clips", render: "Rendering", import_url: "Downloading",
+};
 
 export default function JobBar({ job, onChange }: { job: Job; onChange?: () => void }) {
   const pct = Math.round(job.progress * 100);

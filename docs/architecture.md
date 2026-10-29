@@ -30,6 +30,10 @@ _(planned)_ and live in `implementation-plan.md`.
 * The server binds to `127.0.0.1`, rejects non-local `Host` headers (DNS-rebinding
   guard) and only allows the dev origin through CORS. It lists local folders for the
   import dialog, which is why those guards matter.
+* The app makes **no outbound network calls**, with two narrow, user-triggered
+  exceptions: the one-time Whisper model download, and import-by-URL (see "Import
+  by URL" below and `docs/decisions.md` D13) — the import dialog's existing
+  local-path flow needs neither.
 
 ## Backend modules (`backend/clipforge/`)
 
@@ -41,6 +45,7 @@ _(planned)_ and live in `implementation-plan.md`.
 | `media/ffmpeg.py` | Cancellable ffmpeg runner with `-progress` parsing | ffmpeg |
 | `media/hwaccel.py` | Encoder discovery **with a real test encode**, CUDA detection | ffmpeg, ctranslate2 |
 | `media/paths.py` | Safe file names, unique output paths, fingerprinting, dir validation | — |
+| `media/download.py` | Import-by-URL: classify a URL, stream a direct file download or resolve/fetch via `yt-dlp` | ffmpeg (via yt-dlp), yt-dlp |
 | `transcription/` | `Transcriber` protocol; `faster-whisper` engine (chunked, resumable); sidecar `.srt/.vtt/.json` engine | ffmpeg, faster-whisper |
 | `analysis/signals.py` | Streaming loudness (RMS per 0.5 s) and scene cuts (`ffmpeg select=scene`) | ffmpeg, numpy |
 | `analysis/sentences.py` | Words → sentences → paragraphs using punctuation + pauses | — |
@@ -82,6 +87,35 @@ starts a new transcript when the engine/model changed); re-running `analyze` rep
 only **pending** candidates and keeps anything the user approved or rejected;
 `render` always writes a new versioned file and never overwrites an earlier render.
 
+### Import by URL
+
+An alternative to the local-path import above, for when the user pastes a link
+instead of browsing to a file. Asynchronous (a download can be slow or large),
+so it's its own job kind, in its own lane so it never blocks transcription or
+rendering:
+
+```
+POST /api/projects/{id}/media/import-url {url}        import_url job (lane "download")
+────────────────────────────────────────              ─────────────────────────────────
+validate URL (http/https, non-empty host)   →          classify: direct file URL, or a page
+enqueue import_url (dedupe by project+url)              needing yt-dlp (media/download.py)
+                                                         → stream-download to
+                                                           <data dir>/downloads/<job_id>/
+                                                         → probe → fingerprint → create
+                                                           source_media row (source_url set)
+                                                           → same enqueue as local import
+                                                           (transcribe/analyze)
+                                                         on any failure: delete the partial
+                                                         download, fail the job with a code
+```
+
+The downloaded file becomes that media's `original_path`, exactly like a
+locally-browsed file from here on — same probing, fingerprint-based de-dup,
+transcription, analysis and rendering path. See `docs/decisions.md` D13 for why
+this is a deliberate, narrow exception to "no outbound network calls," and
+what's still true (no scraping, no scheduled or automatic fetching — only the
+one link the user pasted, fetched once).
+
 ## Data model
 
 All IDs are UUID4 strings (stable across machines, safe to sync later).
@@ -101,7 +135,9 @@ Key fields:
 
 * **source_media**: `original_path` (last known absolute path), `file_name`,
   `file_size`, `fingerprint`, probe results (`duration_s`, `width`, `height`, `fps`,
-  codecs, `has_audio`), `status` (`ready` · `missing` · `invalid`).
+  codecs, `has_audio`), `status` (`ready` · `missing` · `invalid`), `source_url`
+  (set only when the media came in through import-by-URL; provenance, never
+  re-fetched automatically).
 * **candidate_clips**: `start_s`, `end_s`, `original_start_s/end_s` (what the analyser
   proposed), `transcript_text`, `score`, `score_breakdown` (feature → value/weight),
   `reasons` (human sentences with evidence), `warnings`, `profile_key`,
@@ -160,6 +196,8 @@ cancelled ◀╯     │
 ├── worker.lock             single-worker lock
 ├── logs/clipforge.log      structured (JSON-lines) log, rotated
 ├── models/                 faster-whisper download_root
+├── downloads/<job_id>/     import-by-URL: the fetched file, kept permanently as
+│                           that media's source (not cleaned up like cache/tmp)
 ├── cache/<media_id>/       loudness.json, scenes-<threshold>.json
 ├── renders/<project-slug>-<id8>/<clip>_v<n>.mp4   (+ .tmp/ for in-progress output)
 └── (exports go wherever the user chooses)
@@ -232,6 +270,7 @@ relative name so Windows drive-letter escaping never reaches the filter string.
 GET  /api/health · /api/system/diagnostics
 GET|POST /api/projects            GET|PATCH /api/projects/{id}
 POST /api/projects/{id}/media     {path, profile_key?, auto_process?}
+POST /api/projects/{id}/media/import-url  {url, profile_key?, auto_process?}  (202, async)
 GET  /api/media/{id} · /api/media/{id}/transcript · /api/media/{id}/candidates
 GET  /api/media/{id}/source (Range) · /api/media/{id}/frame?t=
 POST /api/media/{id}/transcribe · /analyze {profile_key?} · /relink {path, force?}
@@ -253,6 +292,7 @@ GET|PUT /api/settings · GET /api/fs/list?path=
   SQLite. Raw footage stays local unless the user opts into remote processing.
 * **Source connectors**: a `SourceConnector` interface (list new items from a
   creator-authorised source, fetch with the creator's own credentials) feeding the same
-  `import` use-case. No scraping.
+  `import` use-case. No scraping. Import-by-URL (above) is not this: it fetches exactly
+  the one link the user pastes, on demand, never lists or polls a source on its own.
 * **Publishing**: approved renders + post metadata → official platform APIs with tokens
   in the OS keychain.
