@@ -4,15 +4,16 @@ Read this first, every time you work on ClipForge, before touching anything else
 Update it before you stop, and immediately before any context compaction (see
 CLAUDE.md, "ClipForge: HANDOFF.md", for the exact rule).
 
-_Last updated 2026-10-30 (local session, Windows PC, RTX 2060 Super). **TikTok
-publishing is now verified working end to end**, including a real upload: OAuth
-connect → `PublishAccount` row created → a real rendered clip uploaded via the
-Content Posting API → landed as a private draft in the TikTok inbox
-(`platform_upload_id: v_inbox_file~v2.7702405277987014669`, status `draft`,
-confirmed both via `GET /api/publish/jobs` and the Publishing Queue page in the
-UI). Along the way, found and fixed a real chunking bug (see "TikTok: verified
-working end to end" below). **Nothing in this session has been committed yet**
-— see "Uncommitted work" below before touching git._
+_Last updated 2026-10-30 (local session, Windows PC, RTX 2060 Super), end of
+session / closeout. **TikTok publishing is now verified working end to end**,
+including a real upload: OAuth connect → `PublishAccount` row created → a real
+rendered clip uploaded via the Content Posting API → landed as a private draft
+in the TikTok inbox (`platform_upload_id: v_inbox_file~v2.7702405277987014669`,
+status `draft`, confirmed both via `GET /api/publish/jobs` and the Publishing
+Queue page in the UI). Along the way, found and fixed a real chunking bug (see
+"TikTok: verified working end to end" below). **Everything from this session
+is committed and pushed** — `89851e0` on `main`, working tree clean, nothing
+pending._
 
 ## Step zero, every session: fetch before trusting this file
 
@@ -27,10 +28,13 @@ and right now it isn't — check `git status` yourself.
 ## Repo state (check this before believing any of the rest of this file)
 
 - **Repo:** `goodguyllc773-oss/clipforge` (public), branch `main`.
-- **Pushed to `main`:** everything through the publishing feature's first big
-  commit batch — `5f58ce9` (delete-project/accent/bugfixes) and `7ce692b`
-  (publishing: YouTube+TikTok adapters, queue, UI, delete-project backend).
-- **Uncommitted right now** (`git status` to confirm):
+- **Pushed to `main`, `git status` clean:** `5f58ce9` (delete-project/accent/
+  bugfixes), `7ce692b` (publishing: YouTube+TikTok adapters, queue, UI,
+  delete-project backend), and `89851e0` (this session — `.env` wiring, the
+  TikTok chunking fix, display-name fetch, test-isolation fix; see commit
+  message for the full breakdown). Nothing uncommitted right now.
+- **What `89851e0` actually changed**, for context on why things look the way
+  they do:
   - `.gitignore`: `.env.*` was also swallowing `.env.example` (the committed,
     secret-free template) — fixed with a `!.env.example` exception.
   - `backend/clipforge/config.py`: loads a gitignored `.env` from the repo root
@@ -64,19 +68,16 @@ and right now it isn't — check `git status` yourself.
     exercised**: the currently-connected test account was connected before
     this landed, so it still shows as the raw ID
     (`-000rKcUIAXAj0jWlHBiK65hEIspolLGEUnC`) in Settings; only takes effect on
-    the next connect/reconnect, which wasn't forced since the account was
-    already proven to work.
+    the next connect/reconnect, which hasn't happened since (the account
+    already proved working, so reconnecting wasn't forced just for this).
   - `backend/tests/conftest.py` + `test_publishing.py`: the `ctx` fixture now
     explicitly clears all publishing credential fields — a real `.env` was
     leaking into "is this unconfigured" test assertions once `.env` support
     landed. One test simplified now that the fixture guarantees this itself.
   - `README.md`: "Connecting YouTube/TikTok" now says to use `.env` (copied
     from `.env.example`) instead of vague "set it before starting the server".
-  - `.env.example` (new, untracked until `git add`): template for the OAuth
-    env vars, no real values.
-- **Only commit when the user asks** (CLAUDE.md rule). When they do: this
-  batch is one coherent "wire up .env + fix test isolation + TikTok scope
-  fix" unit, reasonable as a single commit.
+  - `.env.example` (new, committed): template for the OAuth env vars, no real
+    values.
 - **`.env` exists at the repo root, is gitignored, and has real values in it
   right now** — TikTok Sandbox credentials, an ngrok redirect base, and the
   extra-allowed-origins entry (see "Publishing: live TikTok sandbox setup"
@@ -316,11 +317,8 @@ All recorded with reasons in `docs/decisions.md` (D1–D14):
 2. **YouTube**: register a Google Cloud OAuth client (README "Connecting
    YouTube"), put the credentials in `.env`, restart, connect, test a real
    upload (YouTube needs no tunnel — loopback redirects work natively there).
-3. **Decide what to commit and push** — see "Uncommitted work" above. Run the
-   full backend test suite + frontend typecheck/build first, since they
-   weren't re-run this session after the latest fixes.
-4. **Milestone 2** (`docs/implementation-plan.md`): local semantic re-ranker
+3. **Milestone 2** (`docs/implementation-plan.md`): local semantic re-ranker
    via Ollama, a hand-labelled real-video eval set, speaker turns, moving face
    tracking, a timeline editor, the Tauri shell, a committed Playwright test.
-5. **Milestone 3 — Original Content Studio** (not started, large, deferred).
-6. **Milestone 4 — Campaign Center** (not started, large, deferred).
+4. **Milestone 3 — Original Content Studio** (not started, large, deferred).
+5. **Milestone 4 — Campaign Center** (not started, large, deferred).
