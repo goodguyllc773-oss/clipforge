@@ -292,6 +292,8 @@ def test_publish_jobs_recover_after_a_restart(ctx, completed_render, fake_adapte
 
 # --------------------------------------------------------------------------- unconfigured platform
 def test_unconfigured_platform_gives_an_actionable_error(ctx):
+    # The `ctx` fixture always clears publishing credentials regardless of a
+    # developer's real .env — see conftest.py.
     from clipforge.publishing.tiktok import TikTokAdapter
     from clipforge.errors import ValidationFailed
     with pytest.raises(ValidationFailed) as e:
@@ -308,3 +310,24 @@ def test_tiktok_refuses_non_private_publish_without_audit(ctx):
                                 PublishRequest(file_path=Path("x.mp4"), title="t", description="",
                                               tags=[], privacy="public"))
     assert "draft" in e.value.hint.lower() or "inbox" in e.value.hint.lower()
+
+
+# --------------------------------------------------------------------------- TikTok chunk planning
+def test_tiktok_chunk_plan_never_leaves_an_undersized_trailing_chunk():
+    # Regression: a fixed 10 MiB chunk size against a file that doesn't divide
+    # evenly (e.g. a ~50 MiB render) left a final chunk of a few hundred KiB,
+    # which TikTok's real API rejects with "The total chunk count is invalid"
+    # (caught connecting a real Sandbox account — see HANDOFF.md).
+    from clipforge.publishing.tiktok import MAX_CHUNK, MIN_CHUNK, _chunk_plan
+
+    for size in [1, MIN_CHUNK - 1, MAX_CHUNK, MAX_CHUNK + 1, 52_690_432, 200 * 1024 * 1024]:
+        chunk_size, count = _chunk_plan(size)
+        assert count >= 1
+        assert chunk_size * count >= size
+        assert chunk_size * (count - 1) < size
+        if count > 1:
+            assert MIN_CHUNK <= chunk_size <= MAX_CHUNK
+            # The real bug: every chunk including the last must meet the floor.
+            last_chunk = size - chunk_size * (count - 1)
+            assert last_chunk >= MIN_CHUNK or count == 1
+    assert _chunk_plan(52_690_432) == (52_690_432, 1)  # fits in one PUT, no chunking needed

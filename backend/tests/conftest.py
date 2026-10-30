@@ -36,8 +36,15 @@ def media(tmp_path_factory) -> dict:
 
 @pytest.fixture
 def ctx(tmp_path) -> AppContext:
-    settings = load_settings(data_dir=tmp_path / "data", transcriber="sidecar", lease_s=3.0,
-                             heartbeat_s=0.3, poll_s=0.05, embedded_worker=False, frontend_dist=None)
+    settings = load_settings(
+        data_dir=tmp_path / "data", transcriber="sidecar", lease_s=3.0,
+        heartbeat_s=0.3, poll_s=0.05, embedded_worker=False, frontend_dist=None,
+        # Never inherit a developer's real .env (publishing credentials, an
+        # ngrok tunnel base for local TikTok testing): tests must see a
+        # consistent "nothing configured" starting point regardless of what's
+        # set up on the machine running them.
+        youtube_client_id="", youtube_client_secret="", tiktok_client_key="", tiktok_client_secret="",
+        oauth_redirect_base="http://127.0.0.1:8765", tiktok_redirect_base="", extra_allowed_origins=())
     c = AppContext(settings)
     # Small output keeps render tests fast; 1080x1920 is covered separately.
     c.update_prefs({"output_width": 540, "output_height": 960,

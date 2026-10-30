@@ -141,8 +141,12 @@ def create_app(ctx: AppContext | None = None, *, settings: Settings | None = Non
             if ctx is None:
                 c.close()
 
+    # Resolved eagerly (not just in lifespan) because middleware is wired up now.
+    effective_settings = (ctx.settings if ctx else settings) or load_settings()
+
     app = FastAPI(title="ClipForge", version=__version__, lifespan=lifespan)
-    app.add_middleware(TrustedHostMiddleware, allowed_hosts=["127.0.0.1", "localhost", "testserver"])
+    app.add_middleware(TrustedHostMiddleware, allowed_hosts=[
+        "127.0.0.1", "localhost", "testserver", *effective_settings.extra_allowed_origins])
     app.add_middleware(CORSMiddleware, allow_origins=DEV_ORIGINS, allow_methods=["*"], allow_headers=["*"])
 
     def C() -> AppContext:
@@ -490,7 +494,7 @@ def create_app(ctx: AppContext | None = None, *, settings: Settings | None = Non
 
     @app.get("/api/publish/{platform}/connect")
     def publish_connect(platform: str):
-        redirect_uri = f"{C().settings.oauth_redirect_base}/api/publish/{platform}/callback"
+        redirect_uri = f"{C().settings.redirect_base(platform)}/api/publish/{platform}/callback"
         url, state = services.publish_authorize_url(C(), platform, redirect_uri)
         now = time.monotonic()
         app.state.oauth_pending = {k: v for k, v in app.state.oauth_pending.items() if v[1] > now}
@@ -509,7 +513,7 @@ def create_app(ctx: AppContext | None = None, *, settings: Settings | None = Non
             return RedirectResponse(f"/#/settings/publish-err/{error}")
         if not pending or pending[0] != platform or pending[1] < time.monotonic() or not code:
             return RedirectResponse("/#/settings/publish-err/invalid_or_expired_state")
-        redirect_uri = f"{C().settings.oauth_redirect_base}/api/publish/{platform}/callback"
+        redirect_uri = f"{C().settings.redirect_base(platform)}/api/publish/{platform}/callback"
         try:
             acc = services.connect_account(C(), platform, redirect_uri, code)
         except ClipForgeError as e:

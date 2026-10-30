@@ -14,6 +14,7 @@ backend/dev-clipforge.db*
 # Secrets and data, just in case they land in the repo
 .env
 .env.*
+!.env.example
 *.db
 *.db-wal
 *.db-shm

@@ -115,6 +115,11 @@ further clicks. See `docs/decisions.md` D14 for the full design. Nothing here
 works without you first registering your own app with each platform; ClipForge
 never ships or embeds platform credentials.
 
+**Credentials go in a `.env` file**, not Windows system environment variables:
+copy `.env.example` (repo root) to `.env`, fill in what you have, save, and
+restart the dev servers — the backend loads it automatically on startup.
+`.env` is gitignored; never commit it.
+
 ### Connecting YouTube
 
 1. In [Google Cloud Console](https://console.cloud.google.com/), create a project
@@ -124,7 +129,7 @@ never ships or embeds platform credentials.
    application**. Add an authorized redirect URI:
    `http://127.0.0.1:8765/api/publish/youtube/callback` (match
    `CLIPFORGE_OAUTH_REDIRECT_BASE` below if you change it).
-3. Copy the Client ID and Client Secret and set them before starting the server:
+3. Copy the Client ID and Client Secret into `.env`:
    `CLIPFORGE_YOUTUBE_CLIENT_ID=...` and `CLIPFORGE_YOUTUBE_CLIENT_SECRET=...`.
 4. Restart ClipForge, then Settings → Integrations → YouTube → Connect account.
    Your Google account's OAuth consent screen opens in your own browser — sign in
@@ -138,8 +143,8 @@ never ships or embeds platform credentials.
 1. Register an app at [TikTok for Developers](https://developers.tiktok.com/)
    and add the **Content Posting API** product.
 2. Add a redirect URI: `http://127.0.0.1:8765/api/publish/tiktok/callback`.
-3. Set `CLIPFORGE_TIKTOK_CLIENT_KEY=...` and `CLIPFORGE_TIKTOK_CLIENT_SECRET=...`,
-   restart, then Settings → Integrations → TikTok → Connect account.
+3. Put `CLIPFORGE_TIKTOK_CLIENT_KEY=...` and `CLIPFORGE_TIKTOK_CLIENT_SECRET=...`
+   in `.env`, restart, then Settings → Integrations → TikTok → Connect account.
 4. **Until TikTok approves your app's Content Posting API access**, published
    clips land as a **private draft** in your TikTok inbox — open the TikTok app
    yourself to add a caption and post it. This is TikTok's own platform policy

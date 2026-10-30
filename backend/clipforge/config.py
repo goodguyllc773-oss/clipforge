@@ -53,6 +53,17 @@ class Settings:
     tiktok_client_secret: str = ""
     # Base URL the OAuth callback is registered under with each platform.
     oauth_redirect_base: str = "http://127.0.0.1:8765"
+    # TikTok rejects localhost/127.0.0.1 redirect URIs outright (unlike
+    # Google, which supports loopback redirects natively) — local testing
+    # needs a real HTTPS URL in front of this server (e.g. an ngrok tunnel,
+    # README "Connecting TikTok"). Overrides oauth_redirect_base for TikTok
+    # only, so YouTube's already-registered 127.0.0.1 redirect keeps working.
+    tiktok_redirect_base: str = ""
+
+    def redirect_base(self, platform: str) -> str:
+        if platform == "tiktok" and self.tiktok_redirect_base:
+            return self.tiktok_redirect_base
+        return self.oauth_redirect_base
 
     # ---- data-dir layout -------------------------------------------------
     @property
@@ -101,7 +112,29 @@ def _bool(v: str | None, default: bool) -> bool:
     return v.strip().lower() in {"1", "true", "yes", "on"}
 
 
+_dotenv_loaded = False
+
+
+def _load_dotenv_once() -> None:
+    """Load a `.env` file from the repo root, if present — mainly for the
+    publishing OAuth client credentials (README "Connecting YouTube/TikTok"),
+    so they don't have to go through Windows' system environment variables.
+    Never overrides a variable the environment already set. Safe to call
+    repeatedly; does nothing after the first call."""
+    global _dotenv_loaded
+    if _dotenv_loaded:
+        return
+    _dotenv_loaded = True
+    try:
+        from dotenv import load_dotenv
+    except ImportError:
+        return
+    repo_root = Path(__file__).resolve().parents[2]
+    load_dotenv(repo_root / ".env", override=False)
+
+
 def load_settings(**overrides) -> Settings:
+    _load_dotenv_once()
     env = os.environ
     repo_dist = Path(__file__).resolve().parents[2] / "frontend" / "dist"
     values = dict(
@@ -120,6 +153,9 @@ def load_settings(**overrides) -> Settings:
         tiktok_client_key=env.get("CLIPFORGE_TIKTOK_CLIENT_KEY", ""),
         tiktok_client_secret=env.get("CLIPFORGE_TIKTOK_CLIENT_SECRET", ""),
         oauth_redirect_base=env.get("CLIPFORGE_OAUTH_REDIRECT_BASE", "http://127.0.0.1:8765"),
+        tiktok_redirect_base=env.get("CLIPFORGE_TIKTOK_REDIRECT_BASE", ""),
+        extra_allowed_origins=tuple(
+            h.strip() for h in env.get("CLIPFORGE_EXTRA_ALLOWED_ORIGINS", "").split(",") if h.strip()),
     )
     values.update(overrides)
     if not isinstance(values["data_dir"], Path):

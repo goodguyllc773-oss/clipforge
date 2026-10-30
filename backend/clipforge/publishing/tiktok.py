@@ -34,10 +34,30 @@ if TYPE_CHECKING:
 AUTH_URL = "https://www.tiktok.com/v2/auth/authorize/"
 TOKEN_URL = "https://open.tiktokapis.com/v2/oauth/token/"
 CREATOR_INFO_URL = "https://open.tiktokapis.com/v2/post/publish/creator_info/query/"
+USER_INFO_URL = "https://open.tiktokapis.com/v2/user/info/"
 INBOX_INIT_URL = "https://open.tiktokapis.com/v2/post/publish/inbox/video/init/"
 STATUS_URL = "https://open.tiktokapis.com/v2/post/publish/status/fetch/"
-SCOPES = ["user.info.basic", "video.upload", "video.publish"]
-CHUNK = 10 * 1024 * 1024  # TikTok's documented minimum chunk size is 5 MiB
+# video.publish is Direct Post only — not requested here since this adapter only
+# ever uses the inbox/draft upload (see the module docstring and `publish()`).
+# An app without Direct Post approval can't be granted that scope anyway.
+SCOPES = ["user.info.basic", "video.upload"]
+# TikTok's documented bounds for a FILE_UPLOAD chunk: 5-64 MiB, except a
+# single-chunk upload (the whole file in one PUT) may be smaller. A fixed
+# chunk size with a size that doesn't divide evenly leaves a tiny remainder
+# chunk, which TikTok's init call rejects ("total chunk count is invalid") —
+# so chunks are sized to split evenly instead.
+MIN_CHUNK = 5 * 1024 * 1024
+MAX_CHUNK = 64 * 1024 * 1024
+
+
+def _chunk_plan(size: int) -> tuple[int, int]:
+    """Returns (chunk_size, total_chunk_count) honoring TikTok's bounds with
+    no undersized trailing chunk."""
+    if size <= MAX_CHUNK:
+        return size, 1
+    count = -(-size // MAX_CHUNK)  # ceil
+    chunk_size = -(-size // count)  # ceil, so count * chunk_size >= size
+    return chunk_size, count
 
 
 def _creds(s: "Settings"):
@@ -87,8 +107,20 @@ class TikTokAdapter:
                                 retryable=False) from e
         if "access_token" not in token_data:
             raise PublishFailed(f"TikTok sign-in failed: {token_data}", retryable=False)
-        info = AccountInfo(external_account_id=token_data.get("open_id", ""),
-                           display_name=token_data.get("open_id", "TikTok account"), scopes=SCOPES)
+        open_id = token_data.get("open_id", "")
+        display_name, avatar_url = open_id, None
+        try:
+            q = urlencode({"fields": "display_name,avatar_url"})
+            req2 = Request(f"{USER_INFO_URL}?{q}",
+                           headers={"Authorization": f"Bearer {token_data['access_token']}"})
+            with urlopen(req2, timeout=15) as resp:
+                user = json.loads(resp.read()).get("data", {}).get("user", {})
+            display_name = user.get("display_name") or display_name
+            avatar_url = user.get("avatar_url")
+        except (HTTPError, URLError, KeyError, ValueError):
+            pass  # cosmetic only — the account still connects fine on open_id
+        info = AccountInfo(external_account_id=open_id, display_name=display_name,
+                           thumbnail_url=avatar_url, scopes=SCOPES)
         return token_data, info
 
     def refresh(self, settings: "Settings", token_data: dict[str, Any]) -> dict[str, Any]:
@@ -118,10 +150,10 @@ class TikTokAdapter:
                      "Or request Direct Post access from TikTok and reconnect once it's approved.")
         token = token_data.get("access_token")
         size = Path(req.file_path).stat().st_size
-        chunk_count = max(1, (size + CHUNK - 1) // CHUNK)
+        chunk_size, chunk_count = _chunk_plan(size)
         init = _post_json(INBOX_INIT_URL, {
             "source_info": {"source": "FILE_UPLOAD", "video_size": size,
-                           "chunk_size": min(CHUNK, size), "total_chunk_count": chunk_count},
+                           "chunk_size": chunk_size, "total_chunk_count": chunk_count},
         }, token=token)
         data = init.get("data") or {}
         upload_url, publish_id = data.get("upload_url"), data.get("publish_id")
@@ -133,7 +165,7 @@ class TikTokAdapter:
             for i in range(chunk_count):
                 if cancel_check:
                     cancel_check()
-                piece = f.read(CHUNK)
+                piece = f.read(chunk_size)
                 start, end = sent, sent + len(piece) - 1
                 r = Request(upload_url, data=piece, method="PUT", headers={
                     "Content-Type": "video/mp4", "Content-Range": f"bytes {start}-{end}/{size}"})
