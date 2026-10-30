@@ -518,6 +518,12 @@ def create_app(ctx: AppContext | None = None, *, settings: Settings | None = Non
             acc = services.connect_account(C(), platform, redirect_uri, code)
         except ClipForgeError as e:
             return RedirectResponse(f"/#/settings/publish-err/{e.code}")
+        except Exception:
+            # The platform SDK's own exchange call (outside our control) can
+            # fail in ways that aren't a ClipForgeError — logged in full here
+            # since the UI only gets a short error code, not a traceback.
+            log.exception("%s OAuth callback: account connect failed", platform)
+            return RedirectResponse(f"/#/settings/publish-err/{platform}_connect_failed")
         return RedirectResponse(f"/#/settings/publish-ok/{platform}:{acc.id}")
 
     @app.post("/api/renders/{render_id}/publish", status_code=202)

@@ -43,7 +43,19 @@ def _flow(s: "Settings", redirect_uri: str):
             "token_uri": "https://oauth2.googleapis.com/token",
         }
     }
-    return Flow.from_client_config(client_config, scopes=SCOPES, redirect_uri=redirect_uri)
+    # authorize_url() and exchange_code() each build their own Flow instance
+    # (there's no server-side session tying one HTTP request to the other),
+    # so a PKCE code_verifier generated for the authorize step would never be
+    # available to the token-exchange step — fetch_token() would send no
+    # verifier (or a fresh, wrong one) for the code_challenge Google already
+    # has on file, and Google rejects the exchange. PKCE is redundant here
+    # anyway: this is a confidential "web application" client authenticating
+    # with its own client_secret, which is what PKCE exists to substitute for
+    # in public clients. Found by actually completing a real sign-in — it
+    # surfaced as a raw 500 (fetch_token's error isn't a ClipForgeError, so
+    # the callback route's `except ClipForgeError` never catches it).
+    return Flow.from_client_config(client_config, scopes=SCOPES, redirect_uri=redirect_uri,
+                                   autogenerate_code_verifier=False)
 
 
 class YouTubeAdapter:

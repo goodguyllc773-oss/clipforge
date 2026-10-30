@@ -4,16 +4,20 @@ Read this first, every time you work on ClipForge, before touching anything else
 Update it before you stop, and immediately before any context compaction (see
 CLAUDE.md, "ClipForge: HANDOFF.md", for the exact rule).
 
-_Last updated 2026-10-30 (local session, Windows PC, RTX 2060 Super), end of
-session / closeout. **TikTok publishing is now verified working end to end**,
-including a real upload: OAuth connect → `PublishAccount` row created → a real
-rendered clip uploaded via the Content Posting API → landed as a private draft
-in the TikTok inbox (`platform_upload_id: v_inbox_file~v2.7702405277987014669`,
-status `draft`, confirmed both via `GET /api/publish/jobs` and the Publishing
-Queue page in the UI). Along the way, found and fixed a real chunking bug (see
-"TikTok: verified working end to end" below). **Everything from this session
-is committed and pushed** — `89851e0` on `main`, working tree clean, nothing
-pending._
+_Last updated 2026-10-30 (local session, Windows PC, RTX 2060 Super). **Both
+TikTok and YouTube publishing are now verified working end to end**, each with
+a real OAuth connect and a real upload:
+- **TikTok** → `platform_upload_id: v_inbox_file~v2.7702405277987014669`,
+  status `draft` (private draft in the inbox, as designed for an unaudited app).
+- **YouTube** → `platform_upload_id: CiNNpnQ8cDg`, status `uploaded`,
+  https://youtu.be/CiNNpnQ8cDg (private — confirmed showing up in YouTube
+  Studio under the "Xavier" channel).
+
+Both required fixing a real bug found only by actually running the flow for
+real (see "TikTok: verified working end to end" and "YouTube: verified working
+end to end" below) — TikTok's chunked upload, and a PKCE `code_verifier`
+mismatch in the YouTube OAuth exchange. **Not yet committed** — see "Uncommitted
+work" below._
 
 ## Step zero, every session: fetch before trusting this file
 
@@ -28,13 +32,31 @@ and right now it isn't — check `git status` yourself.
 ## Repo state (check this before believing any of the rest of this file)
 
 - **Repo:** `goodguyllc773-oss/clipforge` (public), branch `main`.
-- **Pushed to `main`, `git status` clean:** `5f58ce9` (delete-project/accent/
-  bugfixes), `7ce692b` (publishing: YouTube+TikTok adapters, queue, UI,
-  delete-project backend), and `89851e0` (this session — `.env` wiring, the
-  TikTok chunking fix, display-name fetch, test-isolation fix; see commit
-  message for the full breakdown). Nothing uncommitted right now.
-- **What `89851e0` actually changed**, for context on why things look the way
-  they do:
+- **Pushed to `main`:** `5f58ce9` (delete-project/accent/bugfixes), `7ce692b`
+  (publishing: YouTube+TikTok adapters, queue, UI, delete-project backend),
+  `89851e0` (TikTok `.env` wiring, chunking fix, display-name fetch,
+  test-isolation fix), `35dfd89` (HANDOFF.md closeout for the above).
+- **Uncommitted right now** (`git status` to confirm) — the YouTube fix from
+  this session:
+  - `backend/clipforge/publishing/youtube.py`: `_flow()` now passes
+    `autogenerate_code_verifier=False` to `Flow.from_client_config(...)`. Real
+    bug, found by actually connecting a real account: `authorize_url()` and
+    `exchange_code()` each build their own fresh `Flow` instance (nothing
+    ties one HTTP request to the other server-side), but newer
+    `google-auth-oauthlib` (1.5.0 here) auto-generates a PKCE `code_verifier`
+    by default — the verifier from the authorize step was never available at
+    exchange time, so Google's token endpoint rejected every real exchange.
+    PKCE is redundant anyway for this confidential "web application" client,
+    which already authenticates with its own `client_secret`.
+  - `backend/clipforge/api/app.py`: the OAuth callback route now also catches
+    bare `Exception` (not just `ClipForgeError`) around `connect_account(...)`,
+    logs the full traceback via `log.exception(...)`, and redirects to a
+    `<platform>_connect_failed` error page instead of crashing with a raw
+    "Internal Server Error". Found the gap the hard way — the PKCE bug above
+    surfaced as exactly that raw 500 before this existed.
+- **Only commit when the user asks** (CLAUDE.md rule).
+- **What `89851e0` actually changed** (already committed and pushed, kept here
+  for context on why things look the way they do):
   - `.gitignore`: `.env.*` was also swallowing `.env.example` (the committed,
     secret-free template) — fixed with a `!.env.example` exception.
   - `backend/clipforge/config.py`: loads a gitignored `.env` from the repo root
@@ -93,27 +115,26 @@ and right now it isn't — check `git status` yourself.
   once, at startup) needs the dev servers restarted. Restarting: find the PIDs
   on :8765/:5173 (`Get-NetTCPConnection` in PowerShell), `Stop-Process -Force`,
   then relaunch via `explorer.exe start-dev.cmd` — never as a plain background
-  Bash/PowerShell process (gotcha #1 below). Currently running with the
-  Sandbox `.env` values loaded.
+  Bash/PowerShell process (gotcha #1 below). Currently running with both
+  YouTube and TikTok `.env` credentials loaded.
 - **Database:** migrations `0001_initial_schema`, `0002_source_url`,
   `0003_publishing`. Applied automatically on start. `alembic check` → no drift.
-- **Tests:** full suite re-run after the chunk-plan fix: `148 passed, 1
-  skipped` (147 + the new chunk-plan test), this PC (ffmpeg needs prepending
-  to PATH for a tool-call `pytest` run — gotcha #5). Frontend
-  `npm run typecheck` clean (no frontend changes this session, `build` not
-  separately re-run but typecheck covers the relevant risk).
+- **Tests:** full suite re-run after the YouTube PKCE fix: `148 passed, 1
+  skipped`, this PC (ffmpeg needs prepending to PATH for a tool-call `pytest`
+  run — gotcha #5). Frontend `npm run typecheck` clean (no frontend changes
+  this session, `build` not separately re-run but typecheck covers the
+  relevant risk).
 - **Real hardware confirmed:** CUDA transcription, NVENC render, a real
   43-minute YouTube video imported/transcribed/analyzed/rendered end to end —
   see "Last verified working" in git history of this file if needed; not
   re-detailed here to keep this file current rather than exhaustive.
-- **Publishing — YouTube: code-complete, never connected.** No Google Cloud
-  OAuth client has been registered yet (`CLIPFORGE_YOUTUBE_CLIENT_ID/SECRET`
-  are empty in `.env`). Google supports `http://127.0.0.1` redirects natively,
-  so no tunnel will be needed for YouTube — just follow README "Connecting
-  YouTube" when there's a credential to put in.
+- **Publishing — YouTube: fully verified.** Real Google Cloud OAuth client
+  registered, account connected, one real clip uploaded (private) and
+  confirmed showing up in YouTube Studio. See "YouTube: verified working end
+  to end" below.
 - **Publishing — TikTok: fully verified.** Live Sandbox app, account
   connected, one real clip uploaded and confirmed as a private draft. See
-  next section.
+  "TikTok: verified working end to end" below.
 
 ## Publishing: live TikTok sandbox setup (do this before redoing any of it)
 
@@ -202,9 +223,10 @@ just set up:
    up again — it only shows once per visitor per tunnel session.)
    Result: `GET /api/publish/accounts` → one row, `platform: "tiktok"`,
    `status: "connected"`, `external_account_id`/`display_name`:
-   `-000rKcUIAXAj0jWlHBiK65hEIspolLGEUnC` (TikTok's `open_id` — see the
-   display-name fix in "Uncommitted work", not yet re-tested), account id
-   `fcf84ffd-457d-4f8a-bbaa-c12aa3d637a4`.
+   `-000rKcUIAXAj0jWlHBiK65hEIspolLGEUnC` (TikTok's `open_id` — the
+   `/v2/user/info/` display-name fetch landed in `89851e0` after this account
+   connected, so it still shows the raw ID; only takes effect on the next
+   connect/reconnect), account id `fcf84ffd-457d-4f8a-bbaa-c12aa3d637a4`.
 2. **A real publish was attempted** against the one existing rendered clip
    (MrBeast project, render `b3117f92-6f41-4afa-86bd-44940c1b1d79`, 47s,
    1080×1920, ~50.2 MB, h264_nvenc) via
@@ -228,6 +250,60 @@ If the callback fails again in a future session, check the ngrok terminal's
 request log and `backend/logs/clipforge.log` for the actual error — the
 `/api/publish/tiktok/callback` route redirects errors to
 `#/settings/publish-err/<code>` in the UI too.
+
+## YouTube: verified working end to end
+
+Registered from scratch this session (no prior Google Cloud project existed):
+
+- **Google Cloud project**: "ClipForge" (project ID `clipforge-513215`),
+  owned by `goodguyllc773@gmail.com`, no organization.
+- **YouTube Data API v3**: enabled on that project.
+- **OAuth consent screen**: External user type (personal Gmail account, so
+  "Internal" wasn't available), app name "GoodGuyEx ClipForge", support/
+  contact email `goodguyllc773@gmail.com`, publishing status **Testing**
+  (not submitted for Google verification — fine, since the only user is the
+  developer's own test-user account). `goodguyllc773@gmail.com` added as a
+  test user — **required**: testing-mode apps only authorize accounts on this
+  list.
+- **OAuth client**: type "Web application", name "ClipForge", one authorized
+  redirect URI: `http://127.0.0.1:8765/api/publish/youtube/callback`. Client
+  ID/secret are in `.env` as `CLIPFORGE_YOUTUBE_CLIENT_ID` / `_SECRET`.
+  Unlike TikTok, **no tunnel needed** — Google accepts `http://127.0.0.1`
+  redirects natively, so `CLIPFORGE_OAUTH_REDIRECT_BASE` (the default,
+  `http://127.0.0.1:8765`) is used as-is.
+
+### Two real bugs found by actually testing the connect flow
+
+1. **Raw 500 on the very first real callback.** Root cause: a PKCE
+   `code_verifier` mismatch — see "Uncommitted work" above for the full
+   explanation and the fix (`autogenerate_code_verifier=False` in
+   `youtube.py::_flow()`, plus a broader `except Exception` in the callback
+   route so this class of failure gets a friendly error page instead of a
+   crash next time).
+2. **`PUBLISH_FAILED` after the PKCE fix** — not a code bug: the Google
+   account (`goodguyllc773@gmail.com`) had never had a YouTube channel
+   created on it, and `_fetch_channel()` correctly refuses to connect an
+   account with no channel (YouTube's API has nothing to upload to
+   otherwise). Fixed by creating a channel for the account directly
+   (youtube.com → Settings → Account → "Create a channel", default name/
+   picture, handle `@Xavier-q3v8z`) — the user explicitly approved this
+   before it was done. Channel: **"Xavier"**,
+   `https://www.youtube.com/channel/UCFniyzS9waNmsu9-FG3Rmkg`.
+
+### Verified end to end
+
+After both fixes, the full flow actually completed:
+`GET /api/publish/accounts` → `platform: "youtube"`, `status: "connected"`,
+`display_name: "Xavier"`, a real channel thumbnail URL, account id
+`4992280b-dd03-4616-ad6e-c6aa5d946f24`. Then a real publish of the same
+rendered clip (`b3117f92-6f41-4afa-86bd-44940c1b1d79`) via
+`POST /api/renders/{id}/publish` with `privacy: "private"` — job went
+`queued → uploading → uploaded` in ~20s.
+`platform_upload_id: "CiNNpnQ8cDg"`, `platform_post_url:
+"https://youtu.be/CiNNpnQ8cDg"`. Confirmed landing for real in **YouTube
+Studio** (`studio.youtube.com`) under the Xavier channel — title "ClipForge
+test upload", 0:48 duration (matches the render), still processing at the
+time of checking. Also confirmed in ClipForge's own Publishing Queue page.
 
 ## Gotchas (keep reading before you hit these)
 
@@ -289,34 +365,36 @@ All recorded with reasons in `docs/decisions.md` (D1–D14):
    nobody has opened the TikTok app to look at the inbox yet.
 2. **TikTok display name shows the raw `open_id`, not a real name** — the
    `/v2/user/info/` fetch was added after this account connected; only takes
-   effect on the next connect/reconnect (see "Uncommitted work").
-3. **No real upload has been attempted on YouTube** — no OAuth client
-   registered yet at all.
-4. **YouTube has no registered OAuth client yet** — needs a Google Cloud
-   Console project + OAuth client (README "Connecting YouTube"); the user
-   hasn't done this.
-5. **Scheduled publishing isn't honoured.** `PublishJob.scheduled_for` exists
+   effect on the next connect/reconnect.
+3. **YouTube video still "processing" at last check** — uploaded successfully
+   and confirmed in YouTube Studio, but hadn't finished YouTube's own
+   server-side processing yet when checked; no reason to expect it won't
+   finish normally, just not watched all the way through.
+4. **Scheduled publishing isn't honoured.** `PublishJob.scheduled_for` exists
    on the model/API; neither adapter reads it — both publish immediately.
-6. **Clip ranking is a heuristic baseline (`heuristic-v1`).** No semantic
+5. **Clip ranking is a heuristic baseline (`heuristic-v1`).** No semantic
    understanding — the UI and this file both say so on purpose.
-7. No speaker detection; facecam/split-screen regions are set by hand.
-8. SRT/VTT imports have estimated word timings (drift within a line).
-9. **No committed UI test** beyond manual browser-pane verification.
-10. TikTok Production app is half-configured and abandoned — either finish it
-    properly later (real ToS/Privacy/icon, submit for Content Posting API
-    audit to unlock Direct Post) or delete it to avoid confusion.
-11. Only one TikTok chunking path has actually been exercised against the real
+6. No speaker detection; facecam/split-screen regions are set by hand.
+7. SRT/VTT imports have estimated word timings (drift within a line).
+8. **No committed UI test** beyond manual browser-pane verification.
+9. TikTok Production app is half-configured and abandoned — either finish it
+   properly later (real ToS/Privacy/icon, submit for Content Posting API
+   audit to unlock Direct Post) or delete it to avoid confusion.
+10. Only one TikTok chunking path has actually been exercised against the real
     API (the ≤64 MiB single-chunk case, since the test render was ~50 MB).
     The multi-chunk branch of `_chunk_plan()` is covered by a unit test but
     not by a real upload — worth doing once with a longer/larger render.
+11. The "Xavier" YouTube channel created this session has no branding (default
+    grey avatar, no banner) — fine for a test account the API publishes to,
+    but worth knowing if it's ever shown to anyone.
 
 ## What's next
 
-1. **Open the TikTok app and confirm the draft is really there** — quick
+1. **Decide what to commit and push** — the YouTube PKCE/error-handling fix
+   in `youtube.py` + `app.py` is the only uncommitted change right now (see
+   "Uncommitted work" above). Tests are already re-verified (148 passed).
+2. **Open the TikTok app and confirm the draft is really there** — quick
    sanity check now that every API signal says it worked.
-2. **YouTube**: register a Google Cloud OAuth client (README "Connecting
-   YouTube"), put the credentials in `.env`, restart, connect, test a real
-   upload (YouTube needs no tunnel — loopback redirects work natively there).
 3. **Milestone 2** (`docs/implementation-plan.md`): local semantic re-ranker
    via Ollama, a hand-labelled real-video eval set, speaker turns, moving face
    tracking, a timeline editor, the Tauri shell, a committed Playwright test.
