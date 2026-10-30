@@ -4,9 +4,9 @@ Read this first, every time you work on ClipForge, before touching anything else
 Update it before you stop, and immediately before any context compaction (see
 CLAUDE.md, "ClipForge: HANDOFF.md", for the exact rule).
 
-_Last updated 2026-10-30 (local session, Windows PC, RTX 2060 Super). **Both
-TikTok and YouTube publishing are now verified working end to end**, each with
-a real OAuth connect and a real upload:
+_Last updated 2026-10-30 (local session, Windows PC, RTX 2060 Super), end of
+session / closeout. **Both TikTok and YouTube publishing are now verified
+working end to end**, each with a real OAuth connect and a real upload:
 - **TikTok** → `platform_upload_id: v_inbox_file~v2.7702405277987014669`,
   status `draft` (private draft in the inbox, as designed for an unaudited app).
 - **YouTube** → `platform_upload_id: CiNNpnQ8cDg`, status `uploaded`,
@@ -16,8 +16,9 @@ a real OAuth connect and a real upload:
 Both required fixing a real bug found only by actually running the flow for
 real (see "TikTok: verified working end to end" and "YouTube: verified working
 end to end" below) — TikTok's chunked upload, and a PKCE `code_verifier`
-mismatch in the YouTube OAuth exchange. **Not yet committed** — see "Uncommitted
-work" below._
+mismatch in the YouTube OAuth exchange. **Everything from this session is
+committed and pushed** — `80356ac` on `main`, working tree clean, nothing
+pending._
 
 ## Step zero, every session: fetch before trusting this file
 
@@ -32,12 +33,14 @@ and right now it isn't — check `git status` yourself.
 ## Repo state (check this before believing any of the rest of this file)
 
 - **Repo:** `goodguyllc773-oss/clipforge` (public), branch `main`.
-- **Pushed to `main`:** `5f58ce9` (delete-project/accent/bugfixes), `7ce692b`
-  (publishing: YouTube+TikTok adapters, queue, UI, delete-project backend),
-  `89851e0` (TikTok `.env` wiring, chunking fix, display-name fetch,
-  test-isolation fix), `35dfd89` (HANDOFF.md closeout for the above).
-- **Uncommitted right now** (`git status` to confirm) — the YouTube fix from
-  this session:
+- **Pushed to `main`, `git status` clean:** `5f58ce9` (delete-project/accent/
+  bugfixes), `7ce692b` (publishing: YouTube+TikTok adapters, queue, UI,
+  delete-project backend), `89851e0` (TikTok `.env` wiring, chunking fix,
+  display-name fetch, test-isolation fix), `35dfd89` (HANDOFF.md closeout),
+  `80356ac` (YouTube OAuth PKCE fix + broader callback error handling,
+  verified with a real upload). Nothing uncommitted right now.
+- **What `80356ac` actually changed**, for context on why things look the way
+  they do:
   - `backend/clipforge/publishing/youtube.py`: `_flow()` now passes
     `autogenerate_code_verifier=False` to `Flow.from_client_config(...)`. Real
     bug, found by actually connecting a real account: `authorize_url()` and
@@ -54,9 +57,8 @@ and right now it isn't — check `git status` yourself.
     `<platform>_connect_failed` error page instead of crashing with a raw
     "Internal Server Error". Found the gap the hard way — the PKCE bug above
     surfaced as exactly that raw 500 before this existed.
-- **Only commit when the user asks** (CLAUDE.md rule).
-- **What `89851e0` actually changed** (already committed and pushed, kept here
-  for context on why things look the way they do):
+- **What `89851e0` actually changed** (earlier this session, already committed
+  and pushed, kept here for context on why things look the way they do):
   - `.gitignore`: `.env.*` was also swallowing `.env.example` (the committed,
     secret-free template) — fixed with a `!.env.example` exception.
   - `backend/clipforge/config.py`: loads a gitignored `.env` from the repo root
@@ -390,13 +392,10 @@ All recorded with reasons in `docs/decisions.md` (D1–D14):
 
 ## What's next
 
-1. **Decide what to commit and push** — the YouTube PKCE/error-handling fix
-   in `youtube.py` + `app.py` is the only uncommitted change right now (see
-   "Uncommitted work" above). Tests are already re-verified (148 passed).
-2. **Open the TikTok app and confirm the draft is really there** — quick
+1. **Open the TikTok app and confirm the draft is really there** — quick
    sanity check now that every API signal says it worked.
-3. **Milestone 2** (`docs/implementation-plan.md`): local semantic re-ranker
+2. **Milestone 2** (`docs/implementation-plan.md`): local semantic re-ranker
    via Ollama, a hand-labelled real-video eval set, speaker turns, moving face
    tracking, a timeline editor, the Tauri shell, a committed Playwright test.
-4. **Milestone 3 — Original Content Studio** (not started, large, deferred).
-5. **Milestone 4 — Campaign Center** (not started, large, deferred).
+3. **Milestone 3 — Original Content Studio** (not started, large, deferred).
+4. **Milestone 4 — Campaign Center** (not started, large, deferred).
